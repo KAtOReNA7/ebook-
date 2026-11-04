@@ -10,6 +10,10 @@ from scripts.notification_policy import OWNER_ID, enforce_recipients
 
 
 class OwnerOnlyNotifications(unittest.TestCase):
+    def test_unconfigured_owner_blocks_transport_even_with_matching_placeholder(self):
+        with patch('scripts.notification_policy.OWNER_CONFIGURED', False), self.assertRaises(ValueError):
+            enforce_recipients({'收件人': [{'id': OWNER_ID}]})
+
     def test_no_date_can_turn_debug_into_production(self):
         with TemporaryDirectory() as directory, patch.object(daily_run, 'ROOT', Path(directory)):
             daily_run.atomic_json(Path(directory) / 'config/runtime.json',

@@ -75,8 +75,11 @@ class DailyTests(unittest.TestCase):
                 self.rows.extend({**r, '通知状态': ['已发送']} for r in payload['create_records'])
 
         api = FakeBase()
-        self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 1)
-        self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 0)
+        # This test exercises replay against a fake transport, independently
+        # of the developer machine's real owner identity/configuration.
+        with patch('scripts.notification_policy.OWNER_CONFIGURED', True):
+            self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 1)
+            self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 0)
         self.assertEqual(api.calls, 1)
         self.assertEqual(api.rows[0]['通知状态'], ['已发送'])
 
