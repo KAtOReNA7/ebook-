@@ -1,0 +1,5 @@
+{
+  "base": {"base_token": "REPLACE_WITH_PRIVATE_MANIFEST"},
+  "tables": {},
+  "note": "Restore the actual private manifest for the existing Base. This example does not create a new Base or authorize writes."
+}

@@ -1,0 +1,2 @@
+# Python runtime and tests use only the standard library (Python >= 3.11).
+# The separately installed Feishu CLI is required for live Base access.

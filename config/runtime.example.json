@@ -1,0 +1,12 @@
+{
+  "mode": "shadow",
+  "notifications_enabled": false,
+  "production_approved": false,
+  "production_requires_explicit_user_approval": true,
+  "historical_outboxes": "never_replay",
+  "notification_scope": "owner_only_until_explicit_acceptance",
+  "recipients": [],
+  "recipient_open_ids": [],
+  "deployment_stage": "development",
+  "native_workflow": ""
+}

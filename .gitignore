@@ -1,0 +1,44 @@
+# Public repository: explicitly include code, tests, policies and documentation.
+# Business data, authentication and live schema/registries stay local.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/AGENTS.md
+!/pyproject.toml
+!/requirements.txt
+!/.github/
+!/docs/
+!/tools/
+!/scripts/
+!/tests/
+!/config/
+/config/*
+!/config/*.example.json
+!/config/copyright-aliases.json
+!/config/fanqie-ranking.json
+!/config/marketing-fee-policy.json
+!/config/project-model.json
+!/config/service-scope.json
+!/config/work-copyright-policy.json
+!/config/work-metadata-policy.json
+# Historical one-off repairs/activation for the retired system remain local.
+/scripts/activate_verified_rules.py
+/scripts/extend_legacy_schema.py
+/scripts/retire_legacy_schema.py
+/scripts/verify_whole_base.py
+/scripts/repair_acceptance_records.py
+/scripts/test_native_notification.py
+/scripts/revise_spring_archive.py
+/tests/test_revise_spring_archive.py
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.zip
+**/*.lock
+**/.venv/
+**/node_modules/
+**/.DS_Store

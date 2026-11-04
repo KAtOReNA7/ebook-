@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "scope": "ebook_marketing_work_metadata",
+  "author_and_subject": "A confirmed same work may use primary legitimate ebook catalogs as evidence; disclose the source in 基础资料来源 and retain exact URLs.",
+  "native_platform_category": "Use native Fanqie categories when available; disclose work-level reference categories while the Fanqie ID remains pending.",
+  "word_count": "Use the corresponding platform edition only; no cross-platform word-count substitution.",
+  "dynamic_metrics": "Use Fanqie observations only; filling work metadata never marks a project as collected or creates daily observations.",
+  "identity": "No inferred platform IDs. Retain real source-supported IDs and original project record IDs, fee rows, D0 and deadlines.",
+  "notification_on_backfill": false
+}

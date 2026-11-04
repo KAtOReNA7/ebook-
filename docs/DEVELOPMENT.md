@@ -1,0 +1,63 @@
+# 开发与运行
+
+## 配置与凭据
+
+运行不依赖第三方 Python 包。外部读写使用独立安装的 `@larksuite/cli`，始终以 `--as user` 操作。可以先按已验证版本安装：
+
+```powershell
+npm install -g @larksuite/cli@1.0.87
+lark-cli --version
+lark-cli auth --help
+```
+
+按 CLI 自带帮助完成本机用户登录。不要复制旧电脑的 token、浏览器 Cookie、系统凭据库或整个 `.codex` 目录。如果程序找不到 CLI，把 `EBOOK_LARK_CLI` 设为实际可执行文件的绝对路径；变量中不能添加命令参数。
+
+真实 `config/local-system.json` 保存源表 URL、已核实 owner 的 open ID 和姓名。真实 `config/base-manifest.json` 保存现有表、字段、视图 ID。示例文件故意不可用于线上运行；恢复私有状态包后再执行 `python tools/doctor.py`。
+
+版本控制仅包含公开政策和示例配置。真实费用、原始留档、个人身份、源行确认、平台身份映射和去重注册表全部被 `.gitignore` 排除。提交前查看 `git diff --cached`；不要使用 `git add -f` 把这些数据提交到公开仓库。
+
+## 日常入口
+
+```powershell
+# 本地准备、依赖与证据摘要；不联网、不写飞书
+python tools/doctor.py
+
+# 已恢复现场状态且已本机登录后：读取来源和飞书，生成本地计划
+python scripts/daily_run.py --run-kind local --dry-run
+
+# 仅由唯一活动运行电脑的每日10点任务执行
+python scripts/daily_run.py --run-kind scheduled
+
+# 只读全量回读当前Base，另存本地审计收据
+python scripts/verify_current_base.py
+```
+
+`--dry-run` 会进行真实读取并生成本地留档，但不变更多维表格。`--shadow` 仅抑制业务通知，**仍会写业务数据**，不能作为只读检查。完成的同日来源可能复用冻结观察；需要补采时另存新观察并组合有效观察，不能覆盖原始证据或伪造 10 点时间。
+
+执行顺序：手工新项目初始化 → 腾讯完整源表 → 微信四榜和作品 → 番茄网页 → 新项目通知去重 → 营销费用变化核对 → 通知健康检查。独立来源失败不抹去其他来源已取得的数据。进程成功不等于所有待核作品都已覆盖。
+
+## 修改入口
+
+| 目的 | 文件 |
+| --- | --- |
+| 全流程、锁、冻结观察、隔离与通知时机 | `scripts/daily_run.py` |
+| 腾讯解析、准入与源行核对 | `collect_tencent.py`、`parse_tencent.py`、`prepare_tencent_rows.py`、`sync_marketing.py`、`tencent_daily.py` |
+| 微信 / 番茄采集与同步 | `collect_weread.py`、`sync_weread.py` / `collect_fanqie.py`、`sync_fanqie.py`、`fanqie_daily.py` |
+| 全量飞书读写、分页与回执 | `scripts/feishu_io.py` |
+| 标题、标签、摘要展示 | `scripts/presentation.py` |
+| 通知安全边界、费用通知与健康 | `notification_policy.py`、`marketing_expense_notifications.py`、`notification_health.py` |
+| 历史绝对路径跨电脑解析 | `scripts/local_settings.py` |
+| 受控身份接入与归并 | `link_project_identities.py`、`merge_project_aliases.py` |
+
+上表省略目录的文件均位于 `scripts/`。受控身份/归并脚本须先生成与核对计划；默认不运行修复、清理或历史迁移。未知写入与 `requires_review` guard 必须完整只读对账，不能删除 guard 后重试。
+
+## 验证
+
+```powershell
+python -m unittest discover -s tests -t .
+git diff --check
+```
+
+测试不能证明线上全部覆盖。授权变更之后，还需读回相关全表核对记录 ID、关联、日期、服务费及去重键。标签按字段 ID 比较，版权/分类原文与展示简称分开保留。更改字段名时同步维护 `presentation.py`，不要只手动修改飞书表头。
+
+CI 在 Windows 和 Linux 上运行模拟测试，既不恢复私有数据，也不获取飞书登录或设置定时采集。GitHub 上传、开发测试和生产验收是不同步骤。

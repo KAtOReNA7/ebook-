@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "schema_version": "marketing.expense-notices.v1",
+  "scope": "verified_electronic_book_services_from_tencent",
+  "new_services": "reuse_tencent_new_service_event_no_duplicate_notice",
+  "existing_services": "notify_amount_or_review_count_changes_after_complete_source_reconciliation",
+  "initial_history": "baseline_only_never_replay",
+  "production_requires_explicit_user_acceptance": true
+}

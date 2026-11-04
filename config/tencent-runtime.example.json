@@ -1,0 +1,6 @@
+{
+  "identity_maps": [],
+  "initial_history_notifications": "baseline_suppressed",
+  "source_edit_policy": "read_only_review_before_mutation",
+  "service_scope": "config/service-scope.json"
+}

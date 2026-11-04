@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "marketing_owner": "磨铁",
+  "confirmed_on": "2026-11-04",
+  "basis": "用户确认：我们就是磨铁，所有在营销费用表出现的作品均为我方版权；同一作品微信与番茄的版权方一致。",
+  "scope": "verified_electronic_book_marketing_projects",
+  "platform_raw_policy": "preserve_platform_returned_copyright_text_separately",
+  "chart_only_policy": "use_verified_platform_copyright_no_ownership_inference",
+  "notification_on_correction": false
+}

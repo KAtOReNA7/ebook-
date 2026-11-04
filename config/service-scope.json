@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "version": "ebook-only.v1",
+  "effective_on": "2026-11-03",
+  "allowed_service_media": [
+    "ebook"
+  ],
+  "unknown_policy": "exclude_from_base_keep_local_review",
+  "audio_policy": "exclude_even_if_same_work_has_ebook_id",
+  "user_instruction": "全部正式表仅保留电子书；删除不符合条目并全表排查"
+}

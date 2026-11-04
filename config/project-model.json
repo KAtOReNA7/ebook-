@@ -1,0 +1,11 @@
+{
+  "schema_version": "project.ebook-only.v2",
+  "confirmed_on": "2026-11-03",
+  "user_decision": "正式表只保留电子书；排除有声及服务形式未确认的营销条目",
+  "project_identity": "platform + verified electronic book ID",
+  "tracking_medium": "ebook",
+  "service_medium": "ebook only; unknown and audio stay in local review evidence",
+  "cross_medium_identity": "disabled: ebook identity does not admit audio marketing expense",
+  "merge_policy": "merge verified electronic-book services only; preserve record IDs, source fingerprints, original dates",
+  "supersedes": "project.work-model.v1"
+}
