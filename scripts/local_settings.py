@@ -36,19 +36,24 @@ def project_path(value, root=ROOT):
     origin_file = root / 'config/workspace-origin.json'
     origins = json.loads(origin_file.read_text(encoding='utf-8-sig')).get('roots', []) if origin_file.exists() else []
     normalized = raw.replace('\\', '/')
+    path = Path(raw)
+    # Windows may supply a short 8.3 spelling for TEMP (RUNNER~1) while
+    # Path.resolve() records the long spelling. Accept either prefix, retaining
+    # the lexical check first so '..' cannot escape a recorded root.
+    candidates = list(dict.fromkeys([normalized, str(path.resolve()).replace('\\', '/')])) if path.is_absolute() else [normalized]
     for origin in [str(root), *origins]:
         prefix = str(origin).replace('\\', '/').rstrip('/')
         windows = len(prefix) >= 2 and prefix[1] == ':'
-        candidate, expected = (normalized.casefold(), prefix.casefold()) if windows else (normalized, prefix)
-        if candidate == expected or candidate.startswith(expected + '/'):
-            relative = normalized[len(prefix):].lstrip('/')
-            result = (root / relative).resolve()
-            if not result.is_relative_to(root):
-                raise ValueError('Historical workspace path escapes project root')
-            return result
-    path = Path(raw)
+        for spelling in candidates:
+            candidate, expected = (spelling.casefold(), prefix.casefold()) if windows else (spelling, prefix)
+            if candidate == expected or candidate.startswith(expected + '/'):
+                relative = spelling[len(prefix):].lstrip('/')
+                result = (root / relative).resolve()
+                if not result.is_relative_to(root):
+                    raise ValueError('Historical workspace path escapes project root')
+                return result
     if path.is_absolute() or (len(normalized) >= 3 and normalized[1:3] == ':/'):
-        return path
+        return path.resolve() if path.is_absolute() else path
     result = (root / path).resolve()
     if not result.is_relative_to(root):
         raise ValueError('Relative project path escapes project root')

@@ -54,7 +54,7 @@ class HandoffTests(unittest.TestCase):
             runtime = json.loads((target / 'config/runtime.json').read_text())
             self.assertEqual(runtime['mode'], 'shadow')
             self.assertFalse(runtime['production_approved'])
-            self.assertEqual(project_path(source / 'receipts/medium.json', target), target / 'receipts/medium.json')
+            self.assertEqual(project_path(source / 'receipts/medium.json', target), target.resolve() / 'receipts/medium.json')
             self.assertTrue(json.loads((source / 'config/runtime.json').read_text())['notifications_enabled'])
 
     def test_conflicting_restore_is_rejected_before_any_new_file(self):
@@ -89,7 +89,7 @@ class HandoffTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             write(root, 'config/workspace-origin.json', b'{"roots":["E:/project/ebook"]}')
-            self.assertEqual(project_path(r'e:\project\ebook\receipts\a.json', root), root / 'receipts/a.json')
+            self.assertEqual(project_path(r'e:\project\ebook\receipts\a.json', root), root.resolve() / 'receipts/a.json')
             with self.assertRaises(ValueError):
                 project_path(r'E:\project\ebook\..\..\outside.json', root)
 
