@@ -62,5 +62,54 @@ class CompleteReadTests(unittest.TestCase):
         self.assertEqual(self.read_pages([([], {'has_more': False, 'records_count': 0})])[0], [])
 
 
+class AcknowledgedReadbackTests(unittest.TestCase):
+    def fake(self, pages, write_failure=False):
+        class DelayedBase(feishu_io.Base):
+            def __init__(self):
+                self.presentation_enabled = False
+                self.manifest = {'tables': {'test': {'field_readback': {'fields': [
+                    {'name': 'key', 'type': 'text'}, {'name': 'value', 'type': 'text'}]}}}}
+                self.read_calls = 0
+                self.write_calls = 0
+
+            def read(self, *_):
+                page = pages[self.read_calls]
+                self.read_calls += 1
+                return page
+
+            def call(self, *_):
+                self.write_calls += 1
+                if write_failure:
+                    raise RuntimeError('unknown write outcome')
+                return {'ok': True}
+        return DelayedBase()
+
+    def test_delayed_acknowledged_create_is_only_written_once(self):
+        row = {'key': 'a', 'value': 'new'}
+        api = self.fake([[], [], [{'record_id': 'r', **row}]])
+        with patch.object(feishu_io.time, 'sleep') as wait:
+            self.assertEqual(api.ensure('test', 'key', [row])['a']['record_id'], 'r')
+        self.assertEqual(api.write_calls, 1)
+        self.assertEqual(api.read_calls, 3)
+        wait.assert_called_once_with(1)
+
+    def test_persistent_missing_or_different_readback_stops_without_rewriting(self):
+        for page, message in [([], 'missing readback'),
+                              ([{'record_id': 'r', 'key': 'a', 'value': 'stale'}], 'readback differs')]:
+            api = self.fake([[], page, page, page])
+            with self.subTest(page=page), patch.object(feishu_io.time, 'sleep'), self.assertRaisesRegex(RuntimeError, message):
+                api.ensure('test', 'key', [{'key': 'a', 'value': 'new'}])
+            self.assertEqual(api.write_calls, 1)
+            self.assertEqual(api.read_calls, 4)
+
+    def test_unknown_write_is_not_retried_or_accepted(self):
+        api = self.fake([[]], write_failure=True)
+        with patch.object(feishu_io.time, 'sleep') as wait, self.assertRaisesRegex(RuntimeError, 'unknown write'):
+            api.ensure('test', 'key', [{'key': 'a', 'value': 'new'}])
+        self.assertEqual(api.write_calls, 1)
+        self.assertEqual(api.read_calls, 1)
+        wait.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

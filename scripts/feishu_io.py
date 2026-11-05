@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -231,16 +232,27 @@ class Base:
         for i in range(0, len(items), 200):
             self.call('+record-batch-update', table, {'update_records': dict(items[i:i+200])})
         if new or updates:
-            verified = self.read(table, conditions)
-            keyed = [r for r in verified if not (table == '项目总表' and key == '作品唯一键' and not r.get(key))]
-            index = {r[key]: r for r in keyed}
-            if len(index) != len(keyed):
-                raise RuntimeError(f'{table}: duplicate keys on readback')
-            for r in rows:
-                if r[key] not in index:
-                    raise RuntimeError(f'{table}: missing readback {r[key]}')
-                if (r in new or update) and any(not same(v, self._present(table,index[r[key]]).get(k)) for k,v in r.items()):
-                    raise RuntimeError(f'{table}: readback differs for {r[key]}')
+            # Acknowledged creates can briefly be absent from filtered lists.
+            # Re-read only: never replay a mutation or accept ACK as readback.
+            for attempt in range(3):
+                verified = self.read(table, conditions)
+                keyed = [r for r in verified if not (table == '项目总表' and key == '作品唯一键' and not r.get(key))]
+                index = {r[key]: r for r in keyed}
+                if len(index) != len(keyed):
+                    raise RuntimeError(f'{table}: duplicate keys on readback')
+                problem = None
+                for r in rows:
+                    if r[key] not in index:
+                        problem = f'{table}: missing readback {r[key]}'
+                        break
+                    if (r in new or update) and any(not same(v, self._present(table,index[r[key]]).get(k)) for k,v in r.items()):
+                        problem = f'{table}: readback differs for {r[key]}'
+                        break
+                if problem is None:
+                    break
+                if attempt == 2:
+                    raise RuntimeError(problem)
+                time.sleep(attempt + 1)
         return index
 
 
