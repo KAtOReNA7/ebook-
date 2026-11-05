@@ -34,6 +34,7 @@ MAPPING = {
     "copyright_provider": "reader.bookInfo.copyrightInfo.name",
     "copyright_provider_id": "reader.bookInfo.copyrightInfo.id",
     "publisher": "reader.bookInfo.publisher (not copyright provider)",
+    "platform_listing_time": "reader.bookInfo.onTime; Asia/Shanghai; matches App 上架于, not publishTime or proven first-ever listing",
     "category": "bookInfo.category",
     "reviewer_count": "bookInfo.newRatingCount",
     "recommendation_percent": "bookInfo.newRating / 10; nonpositive => unavailable",
@@ -67,6 +68,16 @@ def decode_state(body):
 
 def rating(raw):
     return raw / 10 if isinstance(raw, (int, float)) and raw > 0 else None
+
+
+def listing_time(raw):
+    """Normalize the platform's listing timestamp, never the print publication date."""
+    if type(raw) is not int or raw <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(raw, TZ).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def detail_url(info):
@@ -249,7 +260,7 @@ def collect_detail(task):
             raise ValueError("book_id mismatch")
         raw_metadata = {"bookInfo": {k: info.get(k) for k in (
             "bookId", "title", "author", "totalWords", "publisher", "category", "copyrightInfo",
-            "newRating", "newRatingCount", "publishTime", "cpid", "ranklist")},
+            "newRating", "newRatingCount", "publishTime", "onTime", "cpid", "ranklist")},
             "readingStat": reader.get("readingStat", {})}
         archive = raw_dir / ("detail-" + actual_id + ".json")
         write_json(archive, raw_metadata)
@@ -262,6 +273,8 @@ def collect_detail(task):
             "copyright_provider_id": info.get("copyrightInfo", {}).get("id"),
             "reviewer_count": info.get("newRatingCount"), "recommendation_percent": rating(info.get("newRating")),
             "recommendation_raw": info.get("newRating"), "platform_publish_time": info.get("publishTime"),
+            "platform_listing_time": listing_time(info.get("onTime")),
+            "platform_listing_time_raw": info.get("onTime"),
             "reader_page_reading_count_raw": reader.get("readingStat", {}).get("readingCount"),
             "detail_url": url, "detail_source": evidence}
         time.sleep(0.2)
