@@ -83,6 +83,16 @@ def publication_rising_status(observed=None):
     return observed or {'status': 'not_connected', 'complete': False}
 
 
+def current_scope(all_projects):
+    marketing=[p for p in all_projects if '番茄小说' in options(p.get('平台')) and '营销项目' in options(p.get('监测范围'))]
+    resolved=[p for p in marketing if str(p.get('平台作品ID','')).isdigit()
+              and len(str(p['平台作品ID']))>=10
+              and p.get('作品唯一键')=='fanqie:'+str(p['平台作品ID'])]
+    pending=[str(p.get('作品唯一键') or p.get('record_id') or 'unkeyed')+': platform identity pending'
+             for p in marketing if p not in resolved]
+    return marketing,resolved,pending
+
+
 def run(args):
     day=shanghai_day()
     directory=ROOT/'runs'/day
@@ -94,16 +104,32 @@ def run(args):
             raise RuntimeError('Fanqie interrupted mutation requires reconciliation: '+str(candidate))
     saved=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     if saved.get('phase')=='finished' and not args.dry_run:
-        return {**saved['summary'],'replayed':True,'writes_this_replay':0,
+        # A new marketing project can be registered after today's sample.
+        # Refresh coverage from current scope, without collecting, syncing or
+        # advancing milestones again. Metadata completeness is not coverage.
+        api=Base(ROOT/'receipts'/day/('fanqie-coverage-replay-'+now().strftime('%H%M%S-%f')))
+        marketing,projects,pending=current_scope(api.read('项目总表'))
+        source=directory/'fanqie-effective.json'
+        if not source.exists(): source=directory/'fanqie'/'snapshot.json'
+        data=json.loads(source.read_text(encoding='utf-8'))
+        if data.get('collection_date')!=day or not data.get('finished_at'):
+            raise ValueError('Completed Fanqie run has no valid current-day frozen observation')
+        ids={str(p['平台作品ID']) for p in projects}
+        books=[b for b in data['books'] if str(b['book_id']) in ids]
+        observed={str(b['book_id']) for b in books}
+        pending.extend(p['作品唯一键']+': missing from frozen Fanqie snapshot; collect separately or on next daily run'
+                       for p in projects if str(p['平台作品ID']) not in observed)
+        pending.extend(str(b['book_id'])+': missing '+','.join(b['missing_fields'])
+                       for b in books if b.get('missing_fields'))
+        pending.extend(str(e.get('book_id'))+': '+str(e.get('message')) for e in data.get('errors',[]))
+        return {**saved['summary'],'replayed':True,'writes_this_replay':0,'coverage_refreshed':True,
+                'marketing_projects':len(marketing),'projects':len(projects),'observations':len(books),
+                'pending':pending,'status':'partial' if pending else saved['summary']['status'],
                 'publication_rising_board':publication_rising_status(saved['summary'].get('publication_rising_board'))}
     runtime=notification_runtime(args.shadow)
     api=Base(ROOT/'receipts'/day/('fanqie-daily-'+now().strftime('%H%M%S-%f')))
     all_projects=api.read('项目总表')
-    projects=[p for p in all_projects if '番茄小说' in options(p.get('平台')) and '营销项目' in options(p.get('监测范围'))
-              and str(p.get('平台作品ID','')).isdigit() and len(str(p['平台作品ID']))>=10
-              and p.get('作品唯一键') == 'fanqie:' + str(p['平台作品ID'])]
-    pending=[str(p.get('作品唯一键') or p.get('record_id') or 'unkeyed')+': platform identity pending' for p in all_projects if '番茄小说' in options(p.get('平台'))
-             and '营销项目' in options(p.get('监测范围')) and p not in projects]
+    _,projects,pending=current_scope(all_projects)
     # Reviewed same-day supplements retain their real sampling time and do
     # not overwrite the initial frozen observation.
     source=directory/'fanqie-effective.json'
