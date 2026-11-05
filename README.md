@@ -37,6 +37,8 @@ python -m unittest discover -s tests -t .
 
 完整步骤见 [跨电脑交接](docs/HANDOFF.md)。开发入口与维护约束见 [开发说明](docs/DEVELOPMENT.md)。原电脑私有 `RUNBOOK.md` 是现场记录，随私有状态包传递。
 
+日常选书、折线对比和各表用途见 [运营使用说明](docs/OPERATIONS.md)。原生运营趋势看板由“加入趋势对比”与可选起止日期驱动；三家版权方新上架监测的来源核验仍未完成，不能把现有 Top50 采集视为该范围已接通。
+
 ## 目录
 
 ```text

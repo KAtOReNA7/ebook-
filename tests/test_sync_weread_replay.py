@@ -19,6 +19,8 @@ class SyncWeReadReplayTests(unittest.TestCase):
 
             def __init__(self, *_): pass
 
+            def _fields(self, table): return {}
+
             def read(self, table, *_):
                 if table == '项目总表':
                     return [{'作品唯一键': 'weread:123', 'record_id': 'project',

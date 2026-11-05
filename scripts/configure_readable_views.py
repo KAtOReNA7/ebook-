@@ -11,7 +11,7 @@ from feishu_io import Base, ROOT, save
 
 
 WECHAT_BOARDS = ['微信飙升Top50', '微信新书Top50', '微信女生小说飙升Top50', '微信女生小说新书Top50']
-PROJECT_CORE = ['书名', '作者', '平台', '作品形式', '版权方', '一级分类', '二级分类', '字数']
+PROJECT_CORE = ['书名', '作者', '平台', '一级分类', '二级分类', '字数']
 PROJECT_FEES = ['源表服务费合计', '已确认营销支出', '源表邀评人次', '已确认邀评人次', '营销服务明细']
 PROJECT_TAIL = ['上榜记录', '每日记录', '作品主页', '首次进入项目总表', '追踪截止日',
                 '最新采集时间', '采集状态', '平台匹配状态', '证据与备注']
@@ -22,7 +22,7 @@ SERVICE_FIELDS = ['服务摘要', '书名', '服务日期', '服务平台', '服
 SERVICE_REVIEW = ['服务摘要', '书名', '服务日期', '服务平台', '服务对象', '邀评人数',
                   '单价（元）', '原始行总金额', '已确认分摊金额', '校验说明', '服务留档链接', '原始工作表与行号']
 DAILY_COMMON = ['每日摘要', '书名', '数据日期', '平台', '关联项目']
-DAILY_TAIL = ['版权方', '一级分类', '二级分类', '字数', '采集时间', '采集状态', '缺失字段与原因', '数据来源']
+DAILY_TAIL = ['一级分类', '二级分类', '字数', '采集时间', '采集状态', '缺失字段与原因', '数据来源']
 DAILY_WECHAT = DAILY_COMMON + ['点评人数', '推荐值', '今日阅读人数'] + DAILY_TAIL
 DAILY_FANQIE = DAILY_COMMON + ['累计阅读人数', '点评人数', '书评数量', '精度', '指标原文'] + DAILY_TAIL
 BOARD_FIELDS = ['上榜摘要', '书名', '采集日期', '榜单', '名次', '关联项目', '采集时间', '榜单来源', '快照完整性', '证据与缺口']
@@ -45,11 +45,11 @@ def plan_views():
 
     marketing = ['监测范围', 'intersects', ['营销项目']]
     by_title = sort_of(('书名', False))
-    add('项目总表', '微信读书项目', PROJECT_CORE + WECHAT_LATEST + PROJECT_FEES + PROJECT_TAIL,
+    add('项目总表', '微信读书项目', PROJECT_CORE[:2] + ['加入趋势对比'] + PROJECT_CORE[2:] + WECHAT_LATEST + PROJECT_FEES + PROJECT_TAIL,
         filter_of(['平台', 'intersects', ['微信读书']], marketing), by_title)
-    add('项目总表', '番茄小说项目', PROJECT_CORE + FANQIE_LATEST + ['基础资料来源'] + PROJECT_FEES + PROJECT_TAIL,
+    add('项目总表', '番茄小说项目', PROJECT_CORE[:2] + ['加入趋势对比'] + PROJECT_CORE[2:] + FANQIE_LATEST + ['基础资料来源'] + PROJECT_FEES + PROJECT_TAIL,
         filter_of(['平台', 'intersects', ['番茄小说']], marketing), by_title)
-    add('项目总表', '仅榜单样本', PROJECT_CORE + WECHAT_LATEST + ['上榜记录', '每日记录', '首次上榜采集日', '追踪截止日', '采集状态', '作品主页'],
+    add('项目总表', '仅榜单样本', PROJECT_CORE[:2] + ['加入趋势对比', '当前榜单', '榜单核验日期', '版权方'] + PROJECT_CORE[2:] + WECHAT_LATEST + ['上榜记录', '每日记录', '首次上榜采集日', '追踪截止日', '采集状态', '作品主页'],
         filter_of(['平台', 'intersects', ['微信读书']], ['监测范围', 'intersects', ['仅榜单样本']]), by_title)
     add('项目总表', '待核实作品与作者候选', ['书名', '作者', '平台', '作品形式', '一级分类', '二级分类', '基础资料来源', '平台匹配状态', '证据与备注', '营销服务明细', '源表服务费合计', '源表邀评人次', '采集状态'],
         filter_of(marketing, ['采集状态', 'intersects', ['待接入']]), by_title)

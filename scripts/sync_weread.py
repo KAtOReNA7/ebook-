@@ -13,12 +13,14 @@ try:
     from .presentation import short_copyright
     from .service_scope import policy, admitted_weread_keys
     from .daily_observation import select_daily_observations
+    from .board_display import memberships, OFF_BOARD
 except ImportError:
     from feishu_io import Base, ROOT, save
     from work_copyright import apply_work_copyright
     from presentation import short_copyright
     from service_scope import policy, admitted_weread_keys
     from daily_observation import select_daily_observations
+    from board_display import memberships, OFF_BOARD
 
 BOARDS = {'rising': '微信飙升Top50', 'newbook': '微信新书Top50',
           'novel_female_rising': '微信女生小说飙升Top50',
@@ -58,6 +60,8 @@ def main():
         raise ValueError('Duplicate book identity in Base')
     projects = []
     dayrows = []
+    board_labels = memberships(data)
+    board_fields = api._fields('项目总表')
     for book in data['books']:
         key = 'weread:' + str(book['book_id'])
         old = existing.get(key, {})
@@ -78,6 +82,9 @@ def main():
             '采集状态': [status],
             '指标精度说明': '点评人数/今日阅读为公开数值；推荐值按网页显示的百分数存储（如90.1）。详情页阅读量不代作今日阅读。',
         }
+        if board_labels is not None and '当前榜单' in board_fields:
+            project['当前榜单'] = [board_labels.get(key, OFF_BOARD)]
+            project['榜单核验日期'] = day + ' 00:00'
         # Existing project status, marketing dates, tracking deadline and copyright
         # decisions are user-owned; do not overwrite them during metadata refresh.
         if not old:
