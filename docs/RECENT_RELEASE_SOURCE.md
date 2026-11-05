@@ -29,7 +29,7 @@ album=0
 
 ## 运行
 
-`scripts/collect_weread_recent.py`只读取来源并保存独立观察，不写飞书、不发通知、不推进比较基线，尚未挂入每日业务入口。
+`scripts/collect_weread_recent.py`只读取来源并保存独立观察，不写飞书、不发通知、不推进比较基线。每日业务入口由 `scripts/publisher_recent_daily.py` 编排，已经挂入 `daily_run.py`。
 
 ```powershell
 python scripts/collect_weread_recent.py --providers-file <私有版权方清单.json> --session-file <当前Windows用户的session.dpapi> --out-dir <新的私有观察目录>
@@ -45,4 +45,6 @@ python scripts/recent_entry_tracking.py --providers-file <私有版权方清单.
 
 该登记表必须随私有交接包迁移，不能在新电脑重建或清空，否则会把旧书重复当新书。实际检测时间保留原始观察时刻，不反推真实进入列表的精确时刻。
 
-新进入识别与30日目标规则已实现。每日入口、指标持续采集与飞书同步尚未接入；累计阅读口径及会话续期也仍需处理。源列表已连通不表示整套业务流程已上线。
+每日入口已连接新进入识别、30日目标、公开详情和明确今日阅读采集、飞书项目与每日数据同步。已有营销或榜单项目按同一官方ID复用，保留原监测范围和原窗口；独立记录首次进入最近上架日和版权方追踪截止日。新项目归类为版权方上新，不冒充营销项目或榜单样本，不新增业务提醒。
+
+累计阅读口径及会话自动续期仍未完成。会话失效会报告来源失败，保持上次基线；既有30日目标继续使用公开来源采样。缺失日数据不补造，首次真实新进入前视图为空属于正常状态。

@@ -7,7 +7,10 @@ import argparse
 from datetime import datetime
 import json
 
-from feishu_io import Base, ROOT, save
+try:
+    from .feishu_io import Base, ROOT, save
+except ImportError:
+    from feishu_io import Base, ROOT, save
 
 
 WECHAT_BOARDS = ['微信飙升Top50', '微信新书Top50', '微信女生小说飙升Top50', '微信女生小说新书Top50']
@@ -88,7 +91,10 @@ def plan_views():
 def equivalent_filter(left, right):
     # Feishu returns null after clearing all conditions.
     def canonical(value):
-        return None if not value or not value.get('conditions') else value
+        if not value or not value.get('conditions'):
+            return None
+        return {**value, 'conditions': [c[:2] if c[1] in ('empty', 'non_empty') else c
+                                        for c in value['conditions']]}
     return canonical(left) == canonical(right)
 
 

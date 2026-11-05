@@ -79,7 +79,7 @@ class Base:
     def _ensure_display_options(self, table, rows):
         if not getattr(self, 'presentation_enabled', False): return
         fields=self._fields(table)
-        for name in ('版权方','一级分类','二级分类'):
+        for name in ('版权方','一级分类','二级分类','监测范围'):
             if name not in fields: continue
             wanted={x for r in rows for x in (r.get(name) or [])}
             if wanted <= {x['name'] for x in fields[name].get('options',[])}: continue

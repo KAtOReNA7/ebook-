@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "providers_file": "config/publisher-accounts.private.json",
+  "session_file": "credentials/weread-session.dpapi",
+  "entry_tracking": {
+    "registry": "runs/publisher-recent-entry-registry.json",
+    "initial_snapshot": "baseline_only_no_historical_new_entries",
+    "window_start": "first_new_entry_observed_day_Asia_Shanghai",
+    "tracking_days": 30
+  },
+  "business_notifications_requested": false,
+  "notes": "Restore the existing private registry before enabling. Provider list entries require verified name, user_vid, copyright_id. Reauthorize the session on each computer; never transfer plaintext credentials."
+}

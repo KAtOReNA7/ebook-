@@ -425,10 +425,11 @@ def main():
     with process_lock(ROOT / 'runs' / '.daily.lock'):
         from tencent_daily import run as run_tencent
         from fanqie_daily import run as run_fanqie
+        from publisher_recent_daily import run as run_publisher_recent
         args.source_dir = None
         args.identity_map = []
         initialization = run_project_initialization(args)
-        summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization)
+        summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization, run_publisher_recent)
         summary['modules']['project_notifications'] = run_project_notifications(args, summary)
         summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
         summary['notification_delivery'] = run_notification_health(args.shadow)
@@ -542,7 +543,7 @@ def pipeline_exit_code(summary):
     return 0
 
 
-def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_initialization=None):
+def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_initialization=None, publisher_runner=None):
     """A source read failure must not cancel the independent platform observations."""
     day=shanghai_day()
     directory=ROOT/'runs'/day
@@ -550,7 +551,10 @@ def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_ini
     if project_initialization is not None:
         summary['modules']['project_initialization'] = project_initialization
     shared_identity_unknown=bool((project_initialization or {}).get('identity_mutation_unknown'))
-    for name,runner in [('tencent',tencent_runner),('weread',weread_runner),('fanqie',fanqie_runner)]:
+    runners = [('tencent',tencent_runner),('weread',weread_runner),('fanqie',fanqie_runner)]
+    if publisher_runner is not None:
+        runners.append(('publisher_recent', publisher_runner))
+    for name,runner in runners:
         if shared_identity_unknown:
             summary['modules'][name]={'status':'blocked','reason':'Shared project identity mutation has unknown outcome; reconcile before dependent writes'}
             continue

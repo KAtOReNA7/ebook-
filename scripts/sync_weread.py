@@ -43,15 +43,24 @@ def main():
     args = parser.parse_args()
     source = Path(args.source).resolve()
     data = json.loads(source.read_text(encoding='utf-8'))
+    result = sync(data, source, args.run_kind)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def sync(data, source, run_kind='local', api=None, recent_tracks=None):
+    """Shared metric persistence; recent_tracks must come from the validated registry."""
     if data.get('schema_version') != 'weread.public.v1' or not data.get('finished_at'):
         raise ValueError('Not a finished collector snapshot')
     day = data['collection_date']
-    batch = 'weread:' + data['started_at']
+    batch = ('publisher-recent:' if recent_tracks is not None else 'weread:') + data['started_at']
     run_dir = ROOT / 'receipts' / day / datetime.now().strftime('%H%M%S-%f')
-    api = Base(run_dir)
+    api = api or Base(run_dir)
     prior = [r for r in api.read('项目总表') if r.get('作品唯一键')]
     existing = {r['作品唯一键']: r for r in prior}
-    if policy().get('enabled'):
+    if recent_tracks is not None:
+        if data.get('charts') or any(str(b['book_id']) not in recent_tracks for b in data['books']):
+            raise ValueError('Recent-list sync requires registered targets and no chart mutations')
+    elif policy().get('enabled'):
         admitted=admitted_weread_keys(data,existing)
         data={**data,'books':[b for b in data['books'] if 'weread:'+str(b['book_id']) in admitted]}
     alias_path = ROOT / 'config/copyright-aliases.json'
@@ -92,6 +101,15 @@ def main():
                             '追踪截止日': (datetime.fromisoformat(day) + timedelta(days=29)).strftime('%Y-%m-%d 00:00'),
                             '磨铁版权确认': ['待核实'],
                             '证据与备注': '首次公开榜单观察；非腾讯营销项目。首次快照仅建基线，不发送首次上榜/越线通知。'})
+        if recent_tracks is not None:
+            track = recent_tracks[str(book['book_id'])]
+            project.update({'监测范围': old.get('监测范围') or ['版权方上新'],
+                            '首次进入最近上架日': track['start_date'] + ' 00:00',
+                            '版权方追踪截止日': track['end_date'] + ' 00:00'})
+            if not old:
+                project.pop('首次上榜采集日', None)
+                project['追踪截止日'] = track['end_date'] + ' 00:00'
+                project['证据与备注'] = '完整最近上架列表基线之后首次出现的电子书ID；追踪30天，连载更新与重入不重置。累计阅读人数口径尚未核实。'
         if book.get('copyright_basis') or book.get('copyright_provider') in aliases:
             project['磨铁版权确认'] = ['是']
         elif old.get('版权方原文') in aliases and book.get('copyright_provider') not in aliases:
@@ -128,6 +146,9 @@ def main():
                                   'today_reading_source':book.get('today_reading_source'),
                                   'field_mapping':data['field_mapping']}, ensure_ascii=False),
         })
+        if recent_tracks is not None:
+            daily[-1]['缺失字段与原因'] = '；'.join(filter(None, [daily[-1]['缺失字段与原因'],
+                '累计阅读人数：来源指标含义尚未核实，留空；不使用今日阅读累加或详情阅读量替代']))
     daily_filter=[['数据日期', '==', f'ExactDate({day})']]
     daily=select_daily_observations(daily,api.read('每日数据',daily_filter))
     api.ensure('每日数据', '日数据唯一键', daily, daily_filter, update=True)
@@ -156,7 +177,7 @@ def main():
            '预期作品数': len(data['books']), '成功作品数': sum(s == '成功' for _,_,_,s in dayrows),
            '失败作品数': len(data.get('detail_errors', [])), '新增事件数': 0,
            '状态': ['成功' if complete == len(data['charts']) and all(s == '成功' for _,_,_,s in dayrows) else '部分失败'], '证据路径': str(source),
-           '缺口原因': ('本次运行方式：' + args.run_kind + '；快照实际采集时间：' + data['started_at']
+           '缺口原因': ('本次运行方式：' + run_kind + '；快照实际采集时间：' + data['started_at']
                        + '；完整榜单数：' + str(complete) + '/' + str(len(data['charts'])) + '。'
                        + '本日志只核验本次微信读书采集与同步；其他来源状态见各来源运行日志。'
                        + '通知由独立事件阶段生成，本同步阶段不发送消息。'
@@ -167,7 +188,7 @@ def main():
               'complete_boards':complete, 'write_count': api.changes, 'readback': 'passed',
               'business_notifications_sent':0, 'receipt_dir': str(run_dir)}
     save(run_dir / 'summary.json', result)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
 
 
 if __name__ == '__main__':
