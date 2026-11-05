@@ -37,6 +37,7 @@
 **/.env.*
 **/*.pem
 **/*.key
+**/*.dpapi
 **/*.zip
 **/*.lock
 **/.venv/
