@@ -7,11 +7,13 @@ try:
     from .daily_run import (atomic_json, now, shanghai_day, notification_runtime, options,
                            call_script, create_event_rows, RECIPIENTS)
     from .rules import _event
+    from .work_copyright import apply_work_copyright
 except ImportError:
     from feishu_io import Base, ROOT
     from daily_run import (atomic_json, now, shanghai_day, notification_runtime, options,
                            call_script, create_event_rows, RECIPIENTS)
     from rules import _event
+    from work_copyright import apply_work_copyright
 
 
 def milestone_step(book, registered_date, observed_date, state=None):
@@ -115,7 +117,7 @@ def run(args):
         if data.get('collection_date')!=day or not data.get('finished_at'):
             raise ValueError('Completed Fanqie run has no valid current-day frozen observation')
         ids={str(p['平台作品ID']) for p in projects}
-        books=[b for b in data['books'] if str(b['book_id']) in ids]
+        books=[apply_work_copyright(b,marketing=True) for b in data['books'] if str(b['book_id']) in ids]
         observed={str(b['book_id']) for b in books}
         pending.extend(p['作品唯一键']+': missing from frozen Fanqie snapshot; collect separately or on next daily run'
                        for p in projects if str(p['平台作品ID']) not in observed)
@@ -147,10 +149,6 @@ def run(args):
     data=json.loads(source.read_text(encoding='utf-8'))
     if data.get('collection_date')!=day or not data.get('finished_at'):
         raise ValueError('Fanqie source date/finish invalid')
-    try:
-        from .work_copyright import apply_work_copyright
-    except ImportError:
-        from work_copyright import apply_work_copyright
     registered_ids={str(p['平台作品ID']) for p in projects}
     data={**data,'books':[apply_work_copyright(b,str(b['book_id']) in registered_ids) for b in data['books']]}
     observed_ids={str(book['book_id']) for book in data['books']}

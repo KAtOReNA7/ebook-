@@ -14,7 +14,7 @@ def project(key, book_id=None):
 
 
 class ReplayCoverageTests(unittest.TestCase):
-    def replay(self, projects, observation_day='2026-11-05'):
+    def replay(self, projects, observation_day='2026-11-05', missing_fields=None):
         with TemporaryDirectory() as directory:
             root=Path(directory); run=root/'runs/2026-11-05'; (run/'fanqie').mkdir(parents=True)
             state=run/'fanqie-state.json'
@@ -23,7 +23,7 @@ class ReplayCoverageTests(unittest.TestCase):
             original=state.read_bytes()
             (run/'fanqie/snapshot.json').write_text(json.dumps({'collection_date':observation_day,
                 'finished_at':observation_day+'T10:01:00+08:00',
-                'books':[{'book_id':'123456789012345','missing_fields':[]}]}),encoding='utf-8')
+                'books':[{'book_id':'123456789012345','missing_fields':missing_fields or []}]}),encoding='utf-8')
             class ReadOnlyBase:
                 def __init__(self,*_): pass
                 def read(self,table):
@@ -59,6 +59,14 @@ class ReplayCoverageTests(unittest.TestCase):
     def test_yesterdays_sample_cannot_satisfy_today_replay(self):
         with self.assertRaises(ValueError):
             self.replay([project('fanqie:123456789012345','123456789012345')],'2026-11-04')
+
+    def test_confirmed_work_ownership_applies_to_replay_without_hiding_missing_readers(self):
+        row=project('fanqie:123456789012345','123456789012345')
+        for missing,expected in [(['copyright_provider'],[]),
+                                 (['copyright_provider','cumulative_readers'],['123456789012345: missing cumulative_readers'])]:
+            with self.subTest(missing=missing):
+                result=self.replay([row],missing_fields=missing)
+                self.assertEqual(result['pending'],expected)
 
 
 if __name__=='__main__':
