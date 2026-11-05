@@ -82,6 +82,10 @@ def publication_rising_status(observed=None):
             return {'status': 'user_paused', 'complete': False,
                     'collection_enabled': False, 'reason': config['reason'],
                     'resume_requires': 'explicit_user_request', 'handoff': config['handoff']}
+        if config.get('enabled') is True and config.get('status') == 'web_daily':
+            return {'status': 'separate_daily_module', 'module': 'fanqie_rising',
+                    'complete': False, 'collection_enabled': True,
+                    'reason': '本模块仅采集营销作品详情；榜单结果见流水线 fanqie_rising 模块'}
     return observed or {'status': 'not_connected', 'complete': False}
 
 

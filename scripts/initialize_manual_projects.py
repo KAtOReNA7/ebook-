@@ -73,7 +73,8 @@ def unknown_guard_paths(root):
     # identity migrations/imports interrupted outside the daily coordinator.
     for directory in (root / 'receipts', root / 'runs'):
         for pattern in ('**/legacy-migration-state.json', '**/legacy-rollback-state.json', '**/link-state.json',
-                        '**/alias-merge-state.json', '**/*.apply-state.json', '**/publisher-recent-state.json'):
+                        '**/alias-merge-state.json', '**/*.apply-state.json', '**/publisher-recent-state.json',
+                        '**/fanqie-rising-state.json'):
             candidates.update(directory.glob(pattern))
     unknown = []
     for path in sorted(candidates):

@@ -4,5 +4,8 @@
   "updated_on": "2026-11-03",
   "reason": "用户要求停止番茄出版飙升榜任务，保留入口，先处理其他问题。",
   "resume_requires": "explicit_user_request",
-  "handoff": "research/android-setup/FANQIE-RANKING-PAUSED.md"
+  "handoff": "docs/FANQIE_RISING_HANDOFF.md",
+  "notifications_enabled": false,
+  "integration": "scripts/fanqie_rising_daily.py",
+  "scope": "complete_100_ranks; existing_ebook_marketing_projects_only_for_entry_events"
 }

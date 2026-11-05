@@ -37,7 +37,7 @@ try:
 except ImportError:
     from notification_policy import OWNER_RECIPIENTS, enforce_recipients
 RECIPIENTS = OWNER_RECIPIENTS
-FIXED_GAPS = ['番茄出版飙升榜由用户主动暂停；保留入口，不自动恢复排查，不将暂停视为空榜。']
+FIXED_GAPS = ['番茄出版飙升榜由独立 fanqie_rising 模块报告；暂停、缺榜和完整榜分别处理。']
 
 
 def now():
@@ -425,11 +425,13 @@ def main():
     with process_lock(ROOT / 'runs' / '.daily.lock'):
         from tencent_daily import run as run_tencent
         from fanqie_daily import run as run_fanqie
+        from fanqie_rising_daily import run as run_fanqie_rising
         from publisher_recent_daily import run as run_publisher_recent
         args.source_dir = None
         args.identity_map = []
         initialization = run_project_initialization(args)
-        summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization, run_publisher_recent)
+        summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization, run_publisher_recent,
+                               run_fanqie_rising)
         summary['modules']['project_notifications'] = run_project_notifications(args, summary)
         summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
         summary['notification_delivery'] = run_notification_health(args.shadow)
@@ -474,6 +476,9 @@ def run_project_notifications(args, pipeline):
 
 
 def run_expense_notifications(args, pipeline):
+    if pipeline.get('modules', {}).get('project_initialization', {}).get('identity_mutation_unknown'):
+        return {'status': 'requires_review', 'registry_committed': False, 'events_created': 0,
+                'reason': 'Shared mutation outcome unknown; reconcile before notifications'}
     try:
         from .marketing_expense_notifications import run as notify_expenses
     except ImportError:
@@ -543,7 +548,8 @@ def pipeline_exit_code(summary):
     return 0
 
 
-def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_initialization=None, publisher_runner=None):
+def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_initialization=None, publisher_runner=None,
+                 fanqie_rising_runner=None):
     """A source read failure must not cancel the independent platform observations."""
     day=shanghai_day()
     directory=ROOT/'runs'/day
@@ -552,6 +558,8 @@ def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_ini
         summary['modules']['project_initialization'] = project_initialization
     shared_identity_unknown=bool((project_initialization or {}).get('identity_mutation_unknown'))
     runners = [('tencent',tencent_runner),('weread',weread_runner),('fanqie',fanqie_runner)]
+    if fanqie_rising_runner is not None:
+        runners.append(('fanqie_rising', fanqie_rising_runner))
     if publisher_runner is not None:
         runners.append(('publisher_recent', publisher_runner))
     for name,runner in runners:
@@ -570,6 +578,16 @@ def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_ini
                     if state.get('phase') in {'apply_in_progress','events_in_progress','requires_review'}:
                         shared_identity_unknown=True
                         break
+        if name == 'fanqie_rising':
+            # A failed write must stop dependent modules and notification stages
+            # in this attempt, not only tomorrow's initialization.
+            try:
+                from .initialize_manual_projects import unknown_guard_paths
+            except ImportError:
+                from initialize_manual_projects import unknown_guard_paths
+            if unknown_guard_paths(ROOT):
+                shared_identity_unknown = True
+                summary['modules'].setdefault('project_initialization', {})['identity_mutation_unknown'] = True
     summary['finished_at']=now().isoformat()
     summary['status']='failed' if any(r.get('status') in {'failed','blocked'} for r in summary['modules'].values()) else 'partial'
     summary['process_exit_code']=pipeline_exit_code(summary)

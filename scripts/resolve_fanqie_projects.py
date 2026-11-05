@@ -15,8 +15,12 @@ from pathlib import Path
 import re
 import time
 import unicodedata
+from urllib.parse import urlsplit, parse_qs
 
-from collect_fanqie import Archive, collect, now, write_json, MAPPING, JS_SOURCE, REQUEST_SOURCE
+try:
+    from .collect_fanqie import Archive, collect, now, write_json, MAPPING, JS_SOURCE, REQUEST_SOURCE
+except ImportError:
+    from collect_fanqie import Archive, collect, now, write_json, MAPPING, JS_SOURCE, REQUEST_SOURCE
 
 
 def title_key(text):
@@ -38,6 +42,23 @@ def validate_review(review):
             continue
         if not review.get(path_key) or hashlib.sha256(Path(review[path_key]).read_bytes()).hexdigest() != review.get(hash_key):
             raise ValueError("Identity review evidence missing or hash changed: " + path_key)
+    if review.get('synopsis_visual_match'):
+        path = Path(review['official_text_path'])
+        raw = path.read_bytes()
+        receipt = json.loads(path.with_name(path.name+'.source.json').read_text(encoding='utf-8'))
+        url = urlsplit(receipt['url'])
+        digest = hashlib.sha256(raw).hexdigest()
+        if (url.scheme != 'https' or url.netloc != 'api.fqnovel.com'
+                or url.path != '/novel_ug/share/landing_page'
+                or parse_qs(url.query).get('book_id') != [review.get('quote_match_book_id')]
+                or receipt.get('http_status') != 200
+                or digest != receipt.get('response_sha256') or digest != review.get('official_text_sha256')):
+            raise ValueError('Official synopsis evidence identity/hash mismatch')
+        book = json.loads(raw)['data']['book_data']
+        quote = title_key(review.get('source_text_quote'))
+        if (len(quote) < 40 or quote not in title_key(book.get('intro'))
+                or book.get('title') != review.get('official_text_title')):
+            raise ValueError('Reviewed screenshot quote is too short or absent from official synopsis')
 
 
 def choose(source_title, candidates, source_review=None, copyright_aliases=None):
@@ -48,6 +69,7 @@ def choose(source_title, candidates, source_review=None, copyright_aliases=None)
         allowed_titles.add(title_key(review.get("observed_title")))
     source_author = review.get("observed_author")
     author_verified = review.get("review_method") == "visual_inspection" and review.get("source_image_sha256") and source_author
+    same_title_count = sum(title_key(c.get('title')) == title_key(source_title) for c in candidates)
     eligible, assessments = [], []
     for candidate in candidates:
         reason = []
@@ -59,13 +81,21 @@ def choose(source_title, candidates, source_review=None, copyright_aliases=None)
                           and review.get("cover_match_book_id") == candidate.get("book_id")
                           and review.get("official_cover_sha256") and review.get("cover_visual_match") is True
                           and title_key(review.get("observed_title")) == title_key(candidate.get("title")))
+        synopsis_verified = (review.get('review_method') == 'visual_inspection'
+                             and review.get('source_image_sha256') and review.get('official_text_sha256')
+                             and review.get('synopsis_visual_match') is True
+                             and review.get('quote_match_book_id') == candidate.get('book_id')
+                             and review.get('official_text_title') == candidate.get('title')
+                             and title_key(source_title) == title_key(candidate.get('title'))
+                             and same_title_count == 1
+                             and len(title_key(review.get('source_text_quote'))) >= 40)
         if candidate.get("identity_status") != "book_id_and_title_verified":
             reason.append("official_identity_not_verified")
         if title_key(candidate.get("title")) not in allowed_titles:
             reason.append("full_title_or_version_mismatch")
         if author_verified and author_key(candidate.get("author")) != author_key(source_author):
             reason.append("source_author_mismatch")
-        if not author_verified and not cover_verified and candidate.get("copyright_provider") not in aliases:
+        if not author_verified and not cover_verified and not synopsis_verified and candidate.get("copyright_provider") not in aliases:
             reason.append("no_source_author_and_no_verified_motie_copyright")
         assessments.append({"book_id": candidate.get("book_id"), "title": candidate.get("title"),
                             "author": candidate.get("author"), "copyright_provider": candidate.get("copyright_provider"),
@@ -78,6 +108,7 @@ def choose(source_title, candidates, source_review=None, copyright_aliases=None)
         chosen = eligible[0]
         basis = ("source_screenshot_title_and_author" if author_verified else
                  "source_screenshot_full_title_and_same_official_cover" if review.get("cover_match_book_id") == chosen["book_id"]
+                 else 'source_screenshot_distinctive_synopsis_and_full_source_title' if review.get('quote_match_book_id') == chosen['book_id']
                  else "unique_full_title_and_verified_motie_copyright")
         return {"status": "confirmed", "book_id": chosen["book_id"], "match_basis": basis,
                 "source_author_unavailable": not bool(author_verified), "candidates": assessments}
@@ -153,7 +184,7 @@ def main():
     identity = {"schema_version": "fanqie.marketing-identity.v1", "started_at": started, "finished_at": now(),
                 "source": str(args.source.resolve()), "source_sha256": hashlib.sha256(source_raw).hexdigest(),
                 "summary": summary, "mappings": mappings, "errors": errors,
-                "policy": "source screenshot author+title OR full visible title+same official cover OR unique full title+verified exact Motie copyright; audio editions are separate; keep ambiguity; short internal source IDs never identify Fanqie books"}
+                "policy": "source screenshot author+title OR full visible title+same official cover OR reviewed distinctive screenshot synopsis+full source title OR unique full title+verified exact Motie copyright; audio editions are separate; keep ambiguity; short internal source IDs never identify Fanqie books"}
     write_json(args.output_dir / "candidate-observations.json", list(observations.values()))
     write_json(args.output_dir / "identity-map.json", identity)
     write_json(args.output_dir / "snapshot.json", {"schema_version": "fanqie.public.v1", "started_at": started,
