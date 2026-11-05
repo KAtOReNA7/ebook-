@@ -7,9 +7,18 @@ import argparse
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from feishu_io import Base, ROOT, save
-from work_copyright import apply_work_copyright
-from presentation import short_copyright
+try:
+    from .feishu_io import Base, ROOT, save
+    from .work_copyright import apply_work_copyright
+    from .presentation import short_copyright
+    from .service_scope import policy, admitted_weread_keys
+    from .daily_observation import select_daily_observations
+except ImportError:
+    from feishu_io import Base, ROOT, save
+    from work_copyright import apply_work_copyright
+    from presentation import short_copyright
+    from service_scope import policy, admitted_weread_keys
+    from daily_observation import select_daily_observations
 
 BOARDS = {'rising': '微信飙升Top50', 'newbook': '微信新书Top50',
           'novel_female_rising': '微信女生小说飙升Top50',
@@ -40,7 +49,6 @@ def main():
     api = Base(run_dir)
     prior = [r for r in api.read('项目总表') if r.get('作品唯一键')]
     existing = {r['作品唯一键']: r for r in prior}
-    from service_scope import policy, admitted_weread_keys
     if policy().get('enabled'):
         admitted=admitted_weread_keys(data,existing)
         data={**data,'books':[b for b in data['books'] if 'weread:'+str(b['book_id']) in admitted]}
@@ -105,7 +113,7 @@ def main():
                 'reviewer_count':'点评人数：未取得有效值',
                 'recommendation_percent':'推荐值：未开分',
                 'today_reading_count':'今日阅读人数：'+(book.get('today_reading_missing_reason') or '未取得带今日阅读含义的有效值')
-                }.get(k,k) for k in missing),
+                }.get(k,k) for k in missing) or None,
             '指标原文': json.dumps({'newRating':book.get('recommendation_raw'),
                                   'copyright_basis':book.get('copyright_basis'),
                                   'platform_copyright_provider':book.get('platform_copyright_provider',book.get('copyright_provider')),
@@ -113,7 +121,6 @@ def main():
                                   'today_reading_source':book.get('today_reading_source'),
                                   'field_mapping':data['field_mapping']}, ensure_ascii=False),
         })
-    from daily_observation import select_daily_observations
     daily_filter=[['数据日期', '==', f'ExactDate({day})']]
     daily=select_daily_observations(daily,api.read('每日数据',daily_filter))
     api.ensure('每日数据', '日数据唯一键', daily, daily_filter, update=True)
