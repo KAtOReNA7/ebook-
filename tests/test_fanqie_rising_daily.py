@@ -135,6 +135,97 @@ class RisingDailyTests(unittest.TestCase):
         self.assertTrue(result['replayed'])
         self.assertEqual(result['write_count'], 0)
 
+    def enable_observed_notifications(self):
+        daily.atomic_json(self.root/'config/fanqie-ranking.json', {
+            'enabled': True, 'status': 'web_daily', 'notifications_enabled': True,
+            'notification_basis': 'consecutive_complete_observations',
+            'notifications_effective_from': '2026-11-05', 'notify_exits': True})
+
+    def test_observed_entry_routes_without_platform_timestamp_and_never_replays(self):
+        self.enable_observed_notifications()
+        freeze(self.root, '2026-11-04', finished=True)
+        freeze(self.root, replace_first=True)
+        with patch.object(daily, 'notification_runtime', return_value={'notifications_enabled': True}), \
+                patch.object(daily, 'create_event_rows', return_value=0) as stage:
+            result = self.run_daily()
+            self.assertTrue(result['notifications_enabled'])
+            self.assertIsNone(result['source_updated_at'])
+            rows = stage.call_args.args[1]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['事件类型'], 'board_enter')
+            self.assertIn('2026-11-04T10:03:00+08:00', rows[0]['通知正文'])
+            self.assertIn('2026-11-05T10:03:00+08:00', rows[0]['通知正文'])
+            self.assertIn('不代表平台精确上榜时刻', rows[0]['通知正文'])
+            stage.reset_mock()
+            self.assertEqual(self.run_daily()['write_count'], 0)
+            stage.assert_not_called()
+
+    def test_authorized_observed_exit_has_previous_rank_and_actual_times(self):
+        self.enable_observed_notifications()
+        freeze(self.root, '2026-11-04', replace_first=True, finished=True)
+        freeze(self.root)
+        with patch.object(daily, 'notification_runtime', return_value={'notifications_enabled': True}), \
+                patch.object(daily, 'create_event_rows', return_value=0) as stage:
+            result = self.run_daily()
+            self.assertEqual(result['observed_exits'], 1)
+            rows = stage.call_args.args[1]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['事件类型'], 'board_exit')
+            self.assertIn('上次第1名', rows[0]['通知正文'])
+            self.assertIn('不代表平台精确下榜时刻或作品下架', rows[0]['通知正文'])
+            self.assertIn('2026-11-05T10:03:00+08:00', rows[0]['通知正文'])
+
+    def test_exit_is_not_staged_without_explicit_exit_authorization(self):
+        self.enable_observed_notifications()
+        config = daily.read(self.root/'config/fanqie-ranking.json')
+        config.pop('notify_exits')
+        daily.atomic_json(self.root/'config/fanqie-ranking.json', config)
+        freeze(self.root, '2026-11-04', replace_first=True, finished=True)
+        freeze(self.root)
+        with patch.object(daily, 'notification_runtime', return_value={'notifications_enabled': True}), \
+                patch.object(daily, 'create_event_rows', return_value=0) as stage:
+            result = self.run_daily()
+            self.assertEqual(result['observed_exits'], 1)
+            self.assertEqual(result['candidate_events'], 0)
+            self.assertEqual(stage.call_args.args[1], [])
+
+    def test_observed_notifications_respect_debug_shadow_and_effective_date(self):
+        config = {'notifications_enabled': True,
+                  'notification_basis': 'consecutive_complete_observations',
+                  'notifications_effective_from': '2026-11-06'}
+        self.assertFalse(daily.notification_gate(config, {'notifications_enabled': True}, {}, '2026-11-05'))
+        self.assertFalse(daily.notification_gate(config, {'notifications_enabled': False}, {}, '2026-11-06'))
+        self.assertTrue(daily.notification_gate(config, {'notifications_enabled': True}, {}, '2026-11-06'))
+        config.pop('notifications_effective_from')
+        self.assertFalse(daily.notification_gate(config, {'notifications_enabled': True}, {}, '2026-11-06'))
+        # A legacy config cannot silently opt into the new observation basis.
+        self.assertFalse(daily.notification_gate({'notifications_enabled': True},
+                                                {'notifications_enabled': True}, {}, '2026-11-06'))
+
+    def test_observed_mode_dry_run_does_not_stage_or_advance(self):
+        self.enable_observed_notifications()
+        freeze(self.root, '2026-11-04', finished=True)
+        freeze(self.root, replace_first=True)
+        self.args.dry_run = True
+        with patch.object(daily, 'notification_runtime', return_value={'notifications_enabled': True}), \
+                patch.object(daily, 'create_event_rows') as stage:
+            result = self.run_daily()
+            self.assertEqual(result['candidate_events'], 1)
+            self.assertEqual(result['write_count'], 0)
+            stage.assert_not_called()
+        self.assertFalse((self.root/'runs/2026-11-05/fanqie-rising-state.json').exists())
+
+    def test_exit_has_no_first_baseline_gap_or_incomplete_event(self):
+        _, previous = freeze(self.root, '2026-11-04', replace_first=True)
+        _, current = freeze(self.root)
+        scope = daily.marketing_index([project()])
+        self.assertEqual(daily.exit_events(None, current, scope), [])
+        previous['complete'] = False
+        self.assertEqual(daily.exit_events(previous, current, scope), [])
+        previous['complete'] = True
+        previous['started_at'] = '2026-11-03T10:03:00+08:00'
+        self.assertEqual(daily.exit_events(previous, current, scope), [])
+
     def test_unknown_write_blocks_next_day_and_initialization(self):
         freeze(self.root)
         with self.assertRaises(RuntimeError):

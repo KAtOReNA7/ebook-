@@ -1,7 +1,7 @@
 """Publication rising daily source; caller holds the existing daily process lock.
 
 All 100 ebook ranks are archived. Only existing marketing projects are linked
-and eligible for entry events. No project creation or expense mutation.
+and eligible for authorized board events. No project creation or expense mutation.
 """
 import hashlib
 import json
@@ -102,6 +102,8 @@ def entry_events(previous, current, projects):
                    board_id=BOARD_ID, previous_date=before, observed_date=day,
                    current_rank=b['rank'], previous_rank=None,
                    observation_gap_days=1, reasons=['marketing_project'],
+                   previous_observed_at=previous['ranking_source']['observed_at'],
+                   current_observed_at=current['ranking_source']['observed_at'],
                    source_updated_at=current.get('source_updated_at'),
                    meaning='两次实际网页观察间进入完整出版飙升榜；不代表平台精确上榜时刻')
             for b in current['books'] if b['book_id'] not in old and b['book_id'] in projects]
@@ -131,7 +133,7 @@ def snapshot_rows(data, projects, source):
 
 
 def exit_observations(previous, current, projects):
-    """Observed exits for analysis only; the original rule requests entry notifications."""
+    """Observed exits; notification delivery requires separate configuration."""
     if not previous or not previous.get('complete') or not current.get('complete'):
         return []
     before = shanghai_day(datetime.fromisoformat(previous['started_at']))
@@ -140,22 +142,51 @@ def exit_observations(previous, current, projects):
         return []
     present = {b['book_id'] for b in current['books']}
     return [{'kind': 'board_exit', 'book_id': b['book_id'], 'previous_rank': b['rank'],
-             'previous_date': before, 'observed_date': day, 'notification_requested': False}
+             'previous_date': before, 'observed_date': day}
             for b in previous['books'] if b['book_id'] not in present and b['book_id'] in projects]
+
+
+def exit_events(previous, current, projects):
+    return [_event('board_exit', ('fanqie', row['book_id']),
+                   [BOARD_ID, row['previous_date'], row['observed_date']],
+                   board_id=BOARD_ID, previous_date=row['previous_date'],
+                   observed_date=row['observed_date'], previous_rank=row['previous_rank'],
+                   current_rank=None, observation_gap_days=1, reasons=['marketing_project'],
+                   previous_observed_at=previous['ranking_source']['observed_at'],
+                   current_observed_at=current['ranking_source']['observed_at'],
+                   source_updated_at=current.get('source_updated_at'),
+                   meaning='两次实际网页观察间离开完整出版飙升榜；不代表平台精确下榜时刻或作品下架')
+            for row in exit_observations(previous, current, projects)]
+
+
+def notification_gate(config, runtime, data, day):
+    if config.get('notifications_enabled') is not True or not runtime['notifications_enabled']:
+        return False
+    if config.get('notification_basis') == 'consecutive_complete_observations':
+        # Explicit owner-approved observation semantics; never manufacture the
+        # platform update time or turn old candidates into a historical replay.
+        effective = config.get('notifications_effective_from')
+        if not effective:
+            return False
+        return date.fromisoformat(day) >= date.fromisoformat(effective)
+    return bool(data.get('source_updated_at'))
 
 
 def notification_rows(events, projects, batch):
     rows = []
     for event in events:
         project = projects[event['book_id']]
-        title = project['书名']+'｜进入番茄出版飙升榜'
+        entering = event['kind'] == 'board_enter'
+        title = project['书名']+'｜'+('进入' if entering else '离开')+'番茄出版飙升榜'
+        rank = ('本次第'+str(event['current_rank'])+'名' if entering else
+                '上次第'+str(event['previous_rank'])+'名，本次不在完整Top100中')
         rows.append({'事件唯一键': event['event_id'], '事件类型': event['kind'],
                      '关联项目': [{'id': project['record_id']}],
                      '发生日期': event['observed_date']+' 00:00', '规则ID': 'v1:FANQIE_RANK',
                      '判定证据': json.dumps(event, ensure_ascii=False, sort_keys=True),
                      '通知标题': title,
-                     '通知正文': title+'\n第'+str(event['current_rank'])+'名\n'+event['meaning']+
-                     '\n观测区间：'+event['previous_date']+' 至 '+event['observed_date'],
+                     '通知正文': title+'\n'+rank+'\n'+event['meaning']+
+                     '\n实际采样区间：'+event['previous_observed_at']+' 至 '+event['current_observed_at'],
                      '收件人': [{'id': r} for r in RECIPIENTS],
                      '通知状态': ['待发送'], '采集批次': batch})
     return rows
@@ -214,20 +245,20 @@ def run(args, root=ROOT, api=None, clock=now):
     projects = marketing_index(api.read('项目总表'))
     events = entry_events(previous, data, projects)
     exits = exit_observations(previous, data, projects)
+    if config.get('notify_exits') is True:
+        events += exit_events(previous, data, projects)
     rows = snapshot_rows(data, projects, source)
     outbox = notification_rows(events, projects, BOARD_ID+':'+data['started_at'])
     runtime = notification_runtime(getattr(args, 'shadow', False))
-    # The existing rule requires the platform update time. The current source
-    # does not supply it; retain candidates locally until that evidence exists.
-    notify = (config.get('notifications_enabled') is True and runtime['notifications_enabled']
-              and bool(data.get('source_updated_at')))
+    notify = notification_gate(config, runtime, data, day)
     summary = {'status': 'completed', 'date': day, 'complete': True, 'count': 100,
                'collection_enabled': True, 'baseline': previous is None,
                'marketing_matches': sum(b['book_id'] in projects for b in data['books']),
                'candidate_events': len(events), 'events_created': 0, 'write_count': 0,
                'observed_exits': len(exits),
                'notifications_enabled': notify, 'source_updated_at': data.get('source_updated_at'),
-               'notification_hold': None if notify else '榜单通知未启用或平台更新时间尚未核实；候选仅本地留档',
+               'notification_basis': config.get('notification_basis', 'platform_update_time'),
+               'notification_hold': None if notify else '榜单通知未启用、未到生效日或时间口径未确认；候选仅本地留档',
                'source': str(source), 'dry_run': args.dry_run}
     atomic_json(directory/'fanqie-rising-plan.json', {'summary': summary, 'rows': rows, 'events': outbox,
                                                    'exit_observations': exits})

@@ -1,6 +1,7 @@
 """Read-only local readiness check. Does not query Feishu or start collection."""
 import argparse
 import json
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -10,6 +11,24 @@ from scripts.feishu_io import resolve_cli
 from scripts.initialize_manual_projects import unknown_guard_paths
 from scripts.local_settings import load_settings, project_path
 from scripts.sync_marketing import sha
+
+
+def valid_ranking_policy(ranking):
+    if ranking.get('status') == 'user_paused' and not ranking.get('enabled'):
+        return ranking.get('notifications_enabled') is not True
+    if not (ranking.get('status') == 'web_daily' and ranking.get('enabled') is True
+            and ranking.get('resumed_by_owner') is True):
+        return False
+    if ranking.get('notifications_enabled') is False:
+        return True
+    if (ranking.get('notifications_enabled') is not True
+            or ranking.get('notification_basis') != 'consecutive_complete_observations'):
+        return False
+    try:
+        start = ranking['notifications_effective_from']
+        return date.fromisoformat(start).isoformat() == start
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def check(root=ROOT):
@@ -51,11 +70,8 @@ def check(root=ROOT):
     if runtime.get('notifications_enabled') and runtime.get('recipient_open_ids') != [settings.get('owner_open_id')]:
         errors.append('Debug recipients differ from the configured owner')
     ranking = read('config/fanqie-ranking.json')
-    paused = ranking.get('status') == 'user_paused' and not ranking.get('enabled')
-    resumed = (ranking.get('status') == 'web_daily' and ranking.get('enabled') is True
-               and ranking.get('resumed_by_owner') is True and ranking.get('notifications_enabled') is False)
-    if not (paused or resumed):
-        errors.append('Fanqie ranking requires paused or owner-authorized web_daily mode; notification gate stays closed')
+    if not valid_ranking_policy(ranking):
+        errors.append('Fanqie ranking requires paused or owner-authorized web_daily mode; notifications require an explicit observed-comparison basis and effective date')
     return {'status': 'ready_for_read_only_review' if not errors else 'needs_setup',
             'python': sys.version.split()[0], 'cli': cli, 'errors': errors,
             'notifications_enabled': runtime.get('notifications_enabled', False),

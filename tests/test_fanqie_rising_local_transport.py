@@ -19,7 +19,8 @@ class LocalTransportTests(unittest.TestCase):
         current = {'complete':True,'started_at':'2026-11-06T10:00:00+08:00','books':[]}
         result = exit_observations(old,current,{'123':{}})
         self.assertEqual(result[0]['previous_rank'],7)
-        self.assertFalse(result[0]['notification_requested'])
+        self.assertEqual(result[0]['kind'], 'board_exit')
+        self.assertNotIn('event_id', result[0])  # Observation alone does not authorize delivery.
         self.assertEqual(exit_observations(old,{**current,'complete':False},{'123':{}}),[])
         self.assertEqual(exit_observations(old,{**current,'started_at':'2026-11-07T10:00:00+08:00'},{'123':{}}),[])
 
