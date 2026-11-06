@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from scripts import daily_run
-from scripts.daily_run import (atomic_json, collect_frozen, create_event_rows, event_candidates,
+from scripts.daily_run import (atomic_json, collect_frozen, deliver_event_rows as create_event_rows, event_candidates,
                                load_snapshot, process_lock, shanghai_day, tracked_projects)
 
 

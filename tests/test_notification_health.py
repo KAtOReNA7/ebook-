@@ -133,6 +133,9 @@ class NotificationHealthTests(unittest.TestCase):
         def expense_notifications(*_):
             calls.append('marketing_expense_notifications')
             return {'status': 'requires_review', 'events_created': 0}
+        def digest(*_):
+            calls.append('notification_digest')
+            return {'status': 'requires_review', 'write_count': 0}
         with patch.dict('sys.modules', {'tencent_daily': fake_module, 'fanqie_daily': fake_module}), \
                 patch('sys.argv', ['daily_run.py', '--shadow']), \
                 patch('sys.stdout', new_callable=io.StringIO), \
@@ -140,16 +143,17 @@ class NotificationHealthTests(unittest.TestCase):
                 patch.object(daily_run, 'run_project_initialization', side_effect=initialize), \
                 patch.object(daily_run, 'run_project_notifications', side_effect=project_notifications), \
                 patch.object(daily_run, 'run_expense_notifications', side_effect=expense_notifications), \
+                patch.object(daily_run, 'run_notification_digest', side_effect=digest), \
                 patch.object(daily_run.Base, 'call', side_effect=AssertionError('No real Feishu transport in unit tests')), \
                 patch.object(daily_run, 'run_pipeline', side_effect=pipeline), \
                 patch.object(daily_run, 'run_notification_health', side_effect=health), \
                 patch.object(daily_run, 'atomic_json') as write:
             code = daily_run.main()
-        self.assertEqual(calls, ['initialize', 'sources', 'project_notifications', 'marketing_expense_notifications', 'health'])
+        self.assertEqual(calls, ['initialize', 'sources', 'project_notifications', 'marketing_expense_notifications', 'notification_digest', 'health'])
         self.assertEqual(code, 1)
         summary = write.call_args.args[1]
         self.assertIn('notification_delivery', summary)
-        self.assertEqual(list(summary['modules']), ['weread', 'project_notifications', 'marketing_expense_notifications'])
+        self.assertEqual(list(summary['modules']), ['weread', 'project_notifications', 'marketing_expense_notifications', 'notification_digest'])
 
 
 if __name__ == '__main__':

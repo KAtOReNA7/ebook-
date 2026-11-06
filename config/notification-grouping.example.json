@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "mode": "one_message_per_category_per_day",
+  "categories": ["上榜", "下榜", "营销", "推荐值90%"],
+  "historical_events": "never_replay",
+  "note": "仅活动写入端启用；保留现有owner-only规则。阅读里程碑仍独立汇总，不改变触发条件。"
+}

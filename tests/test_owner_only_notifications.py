@@ -47,7 +47,7 @@ class OwnerOnlyNotifications(unittest.TestCase):
         class History:
             def read(self, *_): return [{**row, '通知状态': ['已发送']}]
             def call(self, *_): raise AssertionError('No repeat write allowed')
-        self.assertEqual(daily_run.create_event_rows(History(), [row], '2026-11-04'), 0)
+        self.assertEqual(daily_run.deliver_event_rows(History(), [row], '2026-11-04'), 0)
 
 
 if __name__ == '__main__':

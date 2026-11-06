@@ -281,6 +281,16 @@ def notification_rows(events, projects, batch):
 
 
 def create_event_rows(api, rows, day):
+    try:
+        from .notification_digest import configured, stage
+    except ImportError:
+        from notification_digest import configured, stage
+    if configured(ROOT):
+        return stage(api, rows, day, ROOT)
+    return deliver_event_rows(api, rows, day)
+
+
+def deliver_event_rows(api, rows, day):
     """Never overwrite state advanced by native automation; verify immutable fields."""
     conditions = [['发生日期', '==', f'ExactDate({day})']]
     existing = api.read('通知事件', conditions)
@@ -434,6 +444,7 @@ def main():
                                run_fanqie_rising)
         summary['modules']['project_notifications'] = run_project_notifications(args, summary)
         summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
+        summary['modules']['notification_digest'] = run_notification_digest(args, summary)
         summary['notification_delivery'] = run_notification_health(args.shadow)
         summary['process_exit_code'] = pipeline_exit_code(summary)
         summary['operational_status'] = {0:'ok', 1:'failed', 2:'requires_review'}[summary['process_exit_code']]
@@ -443,6 +454,20 @@ def main():
                     ('pipeline-dry-run-summary.json' if args.dry_run else 'pipeline-summary.json'), summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return pipeline_exit_code(summary)
+
+
+def run_notification_digest(args, summary):
+    try:
+        from .notification_digest import flush
+    except ImportError:
+        from notification_digest import flush
+    try:
+        return flush(args, summary, notification_runtime(args.shadow), ROOT,
+                     Base(ROOT / 'receipts' / shanghai_day() / ('notification-digest-' + now().strftime('%H%M%S-%f'))),
+                     deliver_event_rows)
+    except Exception as exc:
+        return {'status': 'requires_review', 'write_count': 0, 'error': str(exc),
+                'reason': 'Digest may have unknown outcome; reconcile before retry'}
 
 
 def run_project_initialization(args):
