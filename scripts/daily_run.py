@@ -432,6 +432,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Reads and local plans only; no Base mutation')
     parser.add_argument('--shadow', action='store_true', help='Force local event outbox only, even if runtime enables notifications')
     args = parser.parse_args()
+    if not args.dry_run:
+        try:
+            from .runner_policy import enforce_writer
+        except ImportError:
+            from runner_policy import enforce_writer
+        enforce_writer(ROOT, verify_commit=True)
     with process_lock(ROOT / 'runs' / '.daily.lock'):
         from tencent_daily import run as run_tencent
         from fanqie_daily import run as run_fanqie

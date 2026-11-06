@@ -60,6 +60,9 @@ class HandoffTests(unittest.TestCase):
             runtime = json.loads((target / 'config/runtime.json').read_text())
             self.assertEqual(runtime['mode'], 'shadow')
             self.assertFalse(runtime['production_approved'])
+            runner = json.loads((target / 'config/runner-host.json').read_text())
+            self.assertEqual(runner['role'], 'standby')
+            self.assertFalse(runner['previous_writer_stopped'])
             self.assertEqual(project_path(source / 'receipts/medium.json', target), target.resolve() / 'receipts/medium.json')
             self.assertTrue(json.loads((source / 'config/runtime.json').read_text())['notifications_enabled'])
 

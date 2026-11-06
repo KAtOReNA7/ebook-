@@ -116,6 +116,12 @@ class Base:
         raise RuntimeError('Select option pagination exceeded limit')
 
     def call(self, command, table=None, payload=None, **flags):
+        try:
+            from .runner_policy import READ_COMMANDS, enforce_writer
+        except ImportError:
+            from runner_policy import READ_COMMANDS, enforce_writer
+        if command not in READ_COMMANDS:
+            enforce_writer(ROOT)
         if payload is not None and isinstance(payload,dict) and command in ('+record-batch-create','+record-batch-update'):
             payload=dict(payload)
             if 'create_records' in payload:

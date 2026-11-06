@@ -165,6 +165,11 @@ def restore_state(archive_path, root):
                     'historical_outboxes': 'never_replay', 'deployment_stage': 'handoff_review'})
     runtime_file.parent.mkdir(parents=True, exist_ok=True)
     runtime_file.write_text(json.dumps(runtime, ensure_ascii=False, indent=2), encoding='utf-8')
+    # A restored snapshot never carries authority to become a second writer.
+    runner_file = root / 'config/runner-host.json'
+    runner_file.write_text(json.dumps({'schema': 'ebook.runner-host.v1', 'role': 'standby',
+        'host_fingerprint': None, 'pinned_commit': manifest.get('code_commit'),
+        'previous_writer_stopped': False, 'target_dry_run_reviewed': False}, indent=2), encoding='utf-8')
     origin_file = root / 'config/workspace-origin.json'
     origins = json.loads(origin_file.read_text(encoding='utf-8-sig')).get('roots', []) if origin_file.exists() else []
     origin_file.write_text(json.dumps({'roots': list(dict.fromkeys([manifest['source_root'], *origins]))}, indent=2), encoding='utf-8')
