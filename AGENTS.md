@@ -8,9 +8,9 @@ checkout, also read the private RUNBOOK.md and config/runtime.json.
   recipients, replay historical outboxes, send direct IM, or send test messages.
 - Formal data is ebook-only. Audio and unknown service media stay excluded;
   a corresponding ebook ID does not admit an audio expense.
-- Fanqie publication rising read-only research resumed on 2026-11-05. Use
+- Fanqie publication rising daily integration was authorized on 2026-11-06. Use
   scripts/collect_fanqie_rising.py and docs/FANQIE_RISING_HANDOFF.md. The daily
-  integration remains paused until validated. Use web sources only; do not
+  integration requires complete 100-rank validation and a dry-run before writes. Use web sources only; do not
   start the App, Android tooling or an emulator, or create a new environment.
 - Never guess platform IDs, treat internal expense-sheet numbers as IDs, copy
   reader metrics across platforms, invent zero for missing data, or backdate a

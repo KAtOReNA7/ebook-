@@ -8,6 +8,7 @@ import argparse
 import csv
 import json
 import re
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -32,6 +33,12 @@ CLIENT = {
 }
 CSV_FIELDS = ["rank", "book_id", "title", "author", "rising_value_display",
               "score_display", "reader_label_raw", "detail_url"]
+
+
+def ranking_archive(directory):
+    # The operational host's proxy returns a different, truncated catalogue.
+    # Direct official HTTPS only; no changes to system proxy or other collectors.
+    return Archive(directory, opener=urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 
 def route_params(route):
@@ -161,7 +168,7 @@ def main():
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     directory = args.output_dir or ROOT / "snapshots" / "fanqie-rising" / datetime.now(TZ).strftime("%Y-%m-%d_%H%M%S_%f")
-    archive = Archive(directory)
+    archive = ranking_archive(directory)
     started = now()
     try:
         result = collect(archive)

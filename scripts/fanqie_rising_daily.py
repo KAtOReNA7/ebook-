@@ -10,7 +10,7 @@ from pathlib import Path
 
 try:
     from .collect_fanqie import Archive
-    from .collect_fanqie_rising import collect, discover, normalize, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
+    from .collect_fanqie_rising import collect, discover, normalize, ranking_archive, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
     from .daily_run import (ROOT, now, shanghai_day, atomic_json, options,
                             notification_runtime, create_event_rows, RECIPIENTS)
     from .feishu_io import Base
@@ -18,7 +18,7 @@ try:
     from .rules import _event
 except ImportError:
     from collect_fanqie import Archive
-    from collect_fanqie_rising import collect, discover, normalize, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
+    from collect_fanqie_rising import collect, discover, normalize, ranking_archive, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
     from daily_run import (ROOT, now, shanghai_day, atomic_json, options,
                            notification_runtime, create_event_rows, RECIPIENTS)
     from feishu_io import Base
@@ -130,6 +130,20 @@ def snapshot_rows(data, projects, source):
     return rows
 
 
+def exit_observations(previous, current, projects):
+    """Observed exits for analysis only; the original rule requests entry notifications."""
+    if not previous or not previous.get('complete') or not current.get('complete'):
+        return []
+    before = shanghai_day(datetime.fromisoformat(previous['started_at']))
+    day = shanghai_day(datetime.fromisoformat(current['started_at']))
+    if (date.fromisoformat(day)-date.fromisoformat(before)).days != 1:
+        return []
+    present = {b['book_id'] for b in current['books']}
+    return [{'kind': 'board_exit', 'book_id': b['book_id'], 'previous_rank': b['rank'],
+             'previous_date': before, 'observed_date': day, 'notification_requested': False}
+            for b in previous['books'] if b['book_id'] not in present and b['book_id'] in projects]
+
+
 def notification_rows(events, projects, batch):
     rows = []
     for event in events:
@@ -174,7 +188,7 @@ def run(args, root=ROOT, api=None, clock=now):
         # A partial local archive is retained; use a new attempt directory, then
         # freeze a successful normalized snapshot with its exact raw evidence.
         attempt = directory/('fanqie-rising-attempt-'+stamp.strftime('%H%M%S-%f'))
-        archive = Archive(attempt)
+        archive = ranking_archive(attempt)
         try:
             result = collect(archive)
         except Exception as exc:
@@ -199,6 +213,7 @@ def run(args, root=ROOT, api=None, clock=now):
     api = api or Base(root/'receipts'/day/('fanqie-rising-'+stamp.strftime('%H%M%S-%f')))
     projects = marketing_index(api.read('项目总表'))
     events = entry_events(previous, data, projects)
+    exits = exit_observations(previous, data, projects)
     rows = snapshot_rows(data, projects, source)
     outbox = notification_rows(events, projects, BOARD_ID+':'+data['started_at'])
     runtime = notification_runtime(getattr(args, 'shadow', False))
@@ -210,10 +225,12 @@ def run(args, root=ROOT, api=None, clock=now):
                'collection_enabled': True, 'baseline': previous is None,
                'marketing_matches': sum(b['book_id'] in projects for b in data['books']),
                'candidate_events': len(events), 'events_created': 0, 'write_count': 0,
+               'observed_exits': len(exits),
                'notifications_enabled': notify, 'source_updated_at': data.get('source_updated_at'),
                'notification_hold': None if notify else '榜单通知未启用或平台更新时间尚未核实；候选仅本地留档',
                'source': str(source), 'dry_run': args.dry_run}
-    atomic_json(directory/'fanqie-rising-plan.json', {'summary': summary, 'rows': rows, 'events': outbox})
+    atomic_json(directory/'fanqie-rising-plan.json', {'summary': summary, 'rows': rows, 'events': outbox,
+                                                   'exit_observations': exits})
     if args.dry_run:
         return summary
     atomic_json(state_path, {'phase': 'requires_review', 'source': str(source), 'summary': summary})

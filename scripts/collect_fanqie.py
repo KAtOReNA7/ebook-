@@ -123,8 +123,9 @@ def copyright_metadata(book):
 
 
 class Archive:
-    def __init__(self, directory):
+    def __init__(self, directory, opener=None):
         self.directory = directory
+        self.opener = opener
         directory.mkdir(parents=True, exist_ok=False)
         self.sources = []
 
@@ -133,7 +134,8 @@ class Archive:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
                                                   "Referer": "https://changdunovel.com/"})
         try:
-            with urllib.request.urlopen(req, timeout=25) as response:
+            open_url = self.opener.open if self.opener is not None else urllib.request.urlopen
+            with open_url(req, timeout=25) as response:
                 raw, status, final = response.read(), response.status, response.url
         except urllib.error.HTTPError as exc:
             raw, status, final = exc.read(), exc.code, exc.url

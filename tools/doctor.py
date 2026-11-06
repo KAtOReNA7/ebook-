@@ -50,8 +50,12 @@ def check(root=ROOT):
         errors.append('Production approval is outside the current debugging scope')
     if runtime.get('notifications_enabled') and runtime.get('recipient_open_ids') != [settings.get('owner_open_id')]:
         errors.append('Debug recipients differ from the configured owner')
-    if read('config/fanqie-ranking.json').get('status') != 'user_paused':
-        errors.append('Fanqie ranking must remain paused')
+    ranking = read('config/fanqie-ranking.json')
+    paused = ranking.get('status') == 'user_paused' and not ranking.get('enabled')
+    resumed = (ranking.get('status') == 'web_daily' and ranking.get('enabled') is True
+               and ranking.get('resumed_by_owner') is True and ranking.get('notifications_enabled') is False)
+    if not (paused or resumed):
+        errors.append('Fanqie ranking requires paused or owner-authorized web_daily mode; notification gate stays closed')
     return {'status': 'ready_for_read_only_review' if not errors else 'needs_setup',
             'python': sys.version.split()[0], 'cli': cli, 'errors': errors,
             'notifications_enabled': runtime.get('notifications_enabled', False),
