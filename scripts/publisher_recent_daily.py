@@ -120,7 +120,9 @@ def run(args, root=ROOT, api=None, clock=now):
     if guards:
         return {'status': 'requires_review', 'base_writes': 0, 'guards': guards}
     if state_path.exists():
-        return {**read(state_path)['summary'], 'reused_finished': True, 'base_writes': 0}
+        prior = read(state_path)['summary']
+        if prior.get('status') == 'completed':
+            return {**prior, 'reused_finished': True, 'base_writes': 0}
     registry_path = root/config['entry_tracking']['registry']
     # This operational integration never silently recreates an absent baseline.
     if not registry_path.exists():
@@ -133,6 +135,17 @@ def run(args, root=ROOT, api=None, clock=now):
         session = load_session(root/config['session_file'])
         source_summary = collect(providers, session, directory/'lists')
         observations = [(p, read(directory/'lists'/f'provider-{i}.json')) for i,p in enumerate(providers)]
+        if any(s.get('source', {}).get('http_status') == 401 for _, s in observations):
+            try:
+                from .weread_session import renew
+            except ImportError:
+                from weread_session import renew
+            try:
+                session = renew(root/config['session_file'])
+                source_summary = collect(providers, session, directory/'lists-renewed')
+                observations = [(p, read(directory/'lists-renewed'/f'provider-{i}.json')) for i,p in enumerate(providers)]
+            except Exception as exc:
+                source_summary['renewal_error_type'] = type(exc).__name__
     except Exception as exc:
         # Auth failures do not prevent public sampling of previously registered targets.
         source_summary = {'complete': False, 'error_type': type(exc).__name__}

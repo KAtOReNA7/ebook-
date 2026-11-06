@@ -44,7 +44,8 @@ def main():
             board_counts[board]+=1
             board_ranks.setdefault(board,[]).append(row['名次'])
     for name,positions in board_ranks.items():
-        if sorted(positions)!=list(range(1,51)):
+        expected = 100 if name == '番茄出版飙升榜' else 50
+        if sorted(positions)!=list(range(1,expected+1)):
             raise ValueError('Incomplete rank sequence: '+name)
     marketing=[p for p in projects if p.get('监测范围')==['营销项目']]
     result={'verified_at':datetime.now().astimezone().isoformat(),'base_url':api.manifest['base']['url'],
