@@ -1,13 +1,11 @@
 """Read provider recent-release lists through an explicitly authorized local session.
 
 Read-only source collector: never writes Base data, sends messages, or updates a baseline.
-Session is a current-user Windows DPAPI file, created by a separate explicit login.
+Session is encrypted (Windows DPAPI or opt-in AES-GCM), from a separate explicit login.
 """
 import argparse
-import ctypes
 import hashlib
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,32 +13,12 @@ from pathlib import Path
 
 try:
     from .collect_weread import now, listing_time, rating, write_json
+    from .session_store import load_session
 except ImportError:
     from collect_weread import now, listing_time, rating, write_json
+    from session_store import load_session
 
 ENDPOINT = 'https://i.weread.qq.com/shelf/opus'
-
-
-def load_session(path):
-    if os.name != 'nt':
-        raise RuntimeError('This session adapter requires the Windows user who authorized login')
-
-    class Blob(ctypes.Structure):
-        _fields_ = [('size', ctypes.c_ulong), ('data', ctypes.POINTER(ctypes.c_ubyte))]
-
-    payload = Path(path).read_bytes()
-    buf = ctypes.create_string_buffer(payload)
-    source = Blob(len(payload), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
-    result = Blob()
-    if not ctypes.windll.crypt32.CryptUnprotectData(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(result)):
-        raise RuntimeError('Cannot open the locally authorized WeRead session')
-    try:
-        session = json.loads(ctypes.string_at(result.data, result.size))
-    finally:
-        ctypes.windll.kernel32.LocalFree(result.data)
-    if not session.get('vid') or not session.get('accessToken'):
-        raise ValueError('Local session lacks the required identity fields')
-    return session
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -156,7 +134,7 @@ def collect(providers, session, output, fetch=fetch_recent):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--providers-file', required=True, help='Private JSON array: name, user_vid, copyright_id')
-    parser.add_argument('--session-file', required=True, help='Current Windows user DPAPI session; never commit')
+    parser.add_argument('--session-file', required=True, help='Encrypted .dpapi or .aesgcm session; never commit')
     parser.add_argument('--out-dir', required=True, help='New private observation directory')
     args = parser.parse_args()
     providers = json.loads(Path(args.providers_file).read_text(encoding='utf-8'))

@@ -1,17 +1,16 @@
 """Renew the explicitly authorized local account; never log authentication bodies."""
-import ctypes
 import hashlib
 import json
-import os
 import secrets
 import time
 import urllib.request
-from pathlib import Path
 
 try:
     from .collect_weread_recent import NoRedirect, load_session
+    from .session_store import protect, save_session
 except ImportError:
     from collect_weread_recent import NoRedirect, load_session
+    from session_store import protect, save_session
 
 
 def refreshed(previous, result):
@@ -23,22 +22,6 @@ def refreshed(previous, result):
     if not isinstance(refresh, str) or not refresh:
         raise ValueError('Renewal returned invalid refresh token')
     return {**previous, 'accessToken': result['accessToken'], 'refreshToken': refresh}
-
-
-def protect(payload):
-    if os.name != 'nt':
-        raise RuntimeError('Local session requires current Windows user')
-    class Blob(ctypes.Structure):
-        _fields_ = [('size', ctypes.c_ulong), ('data', ctypes.POINTER(ctypes.c_ubyte))]
-    buf = ctypes.create_string_buffer(payload)
-    src = Blob(len(payload), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
-    dst = Blob()
-    if not ctypes.windll.crypt32.CryptProtectData(ctypes.byref(src), 'ebook WeRead session', None, None, None, 1, ctypes.byref(dst)):
-        raise RuntimeError('Session encryption failed')
-    try:
-        return ctypes.string_at(dst.data, dst.size)
-    finally:
-        ctypes.windll.kernel32.LocalFree(dst.data)
 
 
 def renew(path):
@@ -57,10 +40,5 @@ def renew(path):
     with urllib.request.build_opener(NoRedirect).open(request, timeout=25) as response:
         result = json.load(response)
     session = refreshed(previous, result)
-    encrypted = protect(json.dumps(session).encode())
-    path = Path(path)
-    temporary = path.with_suffix('.renewing.dpapi')
-    with temporary.open('wb') as handle:
-        handle.write(encrypted); handle.flush(); os.fsync(handle.fileno())
-    os.replace(temporary, path)
+    save_session(path, session, replace=True)
     return session

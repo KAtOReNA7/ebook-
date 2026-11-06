@@ -1,0 +1,4 @@
+# Optional: Linux/Dot encrypted session storage and explicit QR login display.
+# Existing Windows DPAPI collection still uses only the standard library.
+cryptography==50.0.2
+qrcode==8.2

@@ -30,6 +30,9 @@ class HandoffTests(unittest.TestCase):
         write(root, 'research/installer.exe', b'not a dependency environment')
         write(root, 'research/.venv/private.json', b'not runtime state')
         write(root, 'receipts/cookies.json', b'NEVER_EXPORT')
+        write(root, 'research/session.aesgcm', b'NEVER_EXPORT')
+        write(root, 'research/session.dpapi', b'NEVER_EXPORT')
+        write(root, 'research/session.key', b'NEVER_EXPORT')
         return evidence
 
     def test_round_trip_preserves_evidence_and_dedup_but_disables_notifications(self):
@@ -46,6 +49,9 @@ class HandoffTests(unittest.TestCase):
             self.assertNotIn('research/installer.exe', names)
             self.assertNotIn('research/.venv/private.json', names)
             self.assertNotIn('receipts/cookies.json', names)
+            self.assertNotIn('research/session.aesgcm', names)
+            self.assertNotIn('research/session.dpapi', names)
+            self.assertNotIn('research/session.key', names)
             restored = restore_state(archive, target)
             self.assertFalse(restored['notifications_enabled'])
             self.assertFalse(restored['scheduler_created'])

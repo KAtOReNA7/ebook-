@@ -2,7 +2,7 @@
 
 ## 配置与凭据
 
-运行不依赖第三方 Python 包。外部读写使用独立安装的 `@larksuite/cli`，始终以 `--as user` 操作。可以先按已验证版本安装：
+现有 Windows 采集不依赖第三方 Python 包。Linux/Dot 的可选加密会话及扫码工具使用 `python -m pip install -r requirements-dot.txt` 安装依赖；CI 同时测试该适配。外部读写使用独立安装的 `@larksuite/cli`，始终以 `--as user` 操作。可以先按已验证版本安装：
 
 ```powershell
 npm install -g @larksuite/cli@1.0.87
@@ -13,6 +13,10 @@ lark-cli auth --help
 按 CLI 自带帮助完成本机用户登录。不要复制旧电脑的 token、浏览器 Cookie、系统凭据库或整个 `.codex` 目录。如果程序找不到 CLI，把 `EBOOK_LARK_CLI` 设为实际可执行文件的绝对路径；变量中不能添加命令参数。
 
 真实 `config/local-system.json` 保存源表 URL、已核实 owner 的 open ID 和姓名。真实 `config/base-manifest.json` 保存现有表、字段、视图 ID。示例文件故意不可用于线上运行；恢复私有状态包后再执行 `python tools/doctor.py`。
+
+版权方会话默认保留 `.dpapi`；目标 Linux 可独立授权成 `.aesgcm`，通过
+`EBOOK_WEREAD_KEY_FILE` 指向仓库外的私人密钥文件，详见 [Dot 交接](DOT_HANDOFF.md)。
+不得直接复制旧设备登录。模拟测试使用合成凭据，不读取真实会话。
 
 版本控制仅包含公开政策和示例配置。真实费用、原始留档、个人身份、源行确认、平台身份映射和去重注册表全部被 `.gitignore` 排除。提交前查看 `git diff --cached`；不要使用 `git add -f` 把这些数据提交到公开仓库。
 

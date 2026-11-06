@@ -7,6 +7,7 @@
 !/AGENTS.md
 !/pyproject.toml
 !/requirements.txt
+!/requirements-dot.txt
 !/.github/
 !/docs/
 !/tools/
@@ -38,6 +39,7 @@
 **/*.pem
 **/*.key
 **/*.dpapi
+**/*.aesgcm
 **/*.zip
 **/*.lock
 **/.venv/

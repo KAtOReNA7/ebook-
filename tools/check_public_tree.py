@@ -26,7 +26,7 @@ def check(root=ROOT):
     issues = []
     for name in filter(None, names):
         path = Path(name)
-        if path.parts[0] in PRIVATE_ROOTS or path.suffix.lower() in {'.zip', '.pem', '.key'}:
+        if path.parts[0] in PRIVATE_ROOTS or path.suffix.lower() in {'.zip', '.pem', '.key', '.dpapi', '.aesgcm'}:
             issues.append((name, 'private local artifact'))
         if path.parts[0] == 'config' and path.name not in PUBLIC_POLICIES and not path.name.endswith('.example.json'):
             issues.append((name, 'live config'))
