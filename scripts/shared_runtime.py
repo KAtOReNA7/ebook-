@@ -17,6 +17,8 @@ import re
 import subprocess
 import sys
 import uuid
+import urllib.request
+import urllib.error
 
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -34,9 +36,13 @@ CONFIGS = {
     'weread-identities-reviewed-2026-11-04.json', 'work-copyright-policy.json',
     'work-metadata-policy.json',
 }
-ROOT_STATES = {'fanqie-milestones.json', 'manual-project-events-state.json',
-    'manual-project-registry.json', 'marketing-expense-notification-state.json',
+ROOT_STATES = {'fanqie-milestones.json',
+    'manual-project-registry.json',
     'marketing-expense-registry.json', 'publisher-recent-entry-registry.json'}
+DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-state.json',
+    'fanqie-state.json','fanqie-effective.json','fanqie-rising-state.json','publisher-recent-state.json',
+    'notification-digest-queue.json','notification-digest.apply-state.json','tencent-outbox.json',
+    'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
 
 
 def load(path):
@@ -77,17 +83,40 @@ def transport_env(root):
     return env
 
 
+_github_token = None
+
+
 def gh(repo, endpoint, payload=None):
-    args = ['gh', 'api', 'repos/' + repo + '/git/' + endpoint]
-    if payload is not None:
-        args += ['--method', 'POST' if not endpoint.startswith('refs/heads/') else 'PATCH', '--input', '-']
+    """Use gh's existing login with stdlib HTTP/1.1, avoiding Go TLS stalls.
+
+    The credential is kept only in process memory, never argv, files or logs.
+    Redirects are disabled so the header cannot leave api.github.com.
+    """
+    global _github_token
+    if _github_token is None:
+        reply = subprocess.run(['gh','auth','token'],capture_output=True,text=True,
+                               encoding='utf-8',timeout=15)
+        if reply.returncode or not reply.stdout.strip():
+            raise RuntimeError('GitHub login is required for shared execution')
+        _github_token = reply.stdout.strip()
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs): return None
+    env = transport_env(Path(__file__).resolve().parents[1])
+    direct = 'api.github.com' in env.get('NO_PROXY','').split(',')
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}) if direct
+                                        else urllib.request.ProxyHandler(), NoRedirect())
+    method = 'GET' if payload is None else 'PATCH' if endpoint.startswith('refs/heads/') else 'POST'
+    request = urllib.request.Request('https://api.github.com/repos/'+repo+'/git/'+endpoint,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={'Authorization':'Bearer '+_github_token,'Accept':'application/vnd.github+json',
+                 'Content-Type':'application/json','User-Agent':'ebook-shared-runner/1'},method=method)
     for attempt in range(3 if payload is None else 1):
-        reply = subprocess.run(args, input=json.dumps(payload) if payload is not None else None,
-                               capture_output=True, text=True, encoding='utf-8', timeout=90,
-                               env=transport_env(Path(__file__).resolve().parents[1]))
-        if reply.returncode == 0:
-            return json.loads(reply.stdout)
-    raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + reply.stderr[:400])
+        try:
+            with opener.open(request,timeout=25) as response:
+                return json.load(response)
+        except (urllib.error.URLError, TimeoutError) as error:
+            failure = type(error).__name__ + ':' + str(getattr(error,'code','transport'))
+    raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + failure)
 
 
 class BusyError(RuntimeError):
@@ -237,6 +266,22 @@ class Store:
         return meta
 
 
+def commit_checkpoint(store, checkpoint, mutex):
+    """Recover lost read/ownership checks without rerunning any business stage."""
+    try:
+        return store.publish(checkpoint)
+    except RuntimeError:
+        mutex.assert_owned()
+        verified, meta = store.read()  # Full, checksummed readback before any retry.
+        if verified == checkpoint:
+            return meta  # The HEAD committed; only its response/readback was lost.
+        if list(store.api.receipt_dir.glob('*-PENDING.json')):
+            raise RuntimeError('Checkpoint mutation outcome is unknown; retain lock for reconciliation') from None
+        # No unknown mutation exists and the old checkpoint is intact. Retry
+        # only this frozen metadata checkpoint, never the completed business run.
+        return store.publish(checkpoint)
+
+
 def safe_path(root, name):
     p = PurePosixPath(name)
     if p.is_absolute() or '..' in p.parts or '\\' in name or ':' in name or p.parts[0] not in {'config','runs','research','receipts'}:
@@ -281,7 +326,7 @@ def capture(root, day):
     for offset in (0, 1):
         date = (datetime.fromisoformat(day) - timedelta(days=offset)).date().isoformat()
         directory = root/'runs'/date
-        paths.update(directory.glob('*.json'))
+        paths.update(directory/name for name in DAY_STATES)
         for folder in ('tencent-source', 'fanqie-rising'):
             paths.update((directory/folder).glob('*.json'))
             paths.update((directory/folder).glob('*.jsonp'))
@@ -297,14 +342,20 @@ def capture(root, day):
         raw = path.read_bytes()
         files[name] = {'text': raw.decode('utf-8'), 'sha256': digest(raw)}
     origin = root/'config/workspace-origin.json'
-    origins = load(origin).get('roots', []) if origin.exists() else []
+    origins = sorted(set([str(root.resolve()), *(load(origin).get('roots', []) if origin.exists() else [])]))
     from scripts.initialize_manual_projects import unknown_guard_paths
     unresolved = unknown_guard_paths(root)
+    for name in ('manual-project-events-state.json','marketing-expense-notification-state.json'):
+        path = root/'runs'/name
+        if path.exists() and load(path).get('phase') != 'finished':
+            unresolved.append(str(path))
+            raw = path.read_bytes()
+            files[path.relative_to(root).as_posix()] = {'text':raw.decode('utf-8'),'sha256':digest(raw)}
     for name in ('daily-state.json', 'fanqie-state.json', 'tencent-state.json'):
         for path in (root/'runs').glob('*/'+name):
             if load(path).get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
                 unresolved.append(str(path))
-    return {'schema': 'ebook-shared-checkpoint.v1', 'source_root': str(root.resolve()), 'source_roots': origins,
+    return {'schema': 'ebook-shared-checkpoint.v1', 'source_root': origins[0], 'source_roots': origins,
             'day': day, 'files': files, 'unresolved_guards': unresolved}
 
 
@@ -369,7 +420,7 @@ def session(root, dry_run=False):
         result = {'generation': meta['generation'], 'restored_files': len(checkpoint['files'])}
         yield result
         if not dry_run:
-            saved = store.publish(capture(root, shanghai_day()))
+            saved = commit_checkpoint(store, capture(root, shanghai_day()), mutex)
             mutex.release()
             acquired = False
             result.update(checkpoint_committed=True, committed_generation=saved['generation'], lock_released=True)

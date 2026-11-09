@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
-from scripts.shared_runtime import Mutex, Store, capture, restore, digest, safe_path, TABLE
+from scripts.shared_runtime import Mutex, Store, capture, restore, digest, safe_path, TABLE, commit_checkpoint
 
 
 class FakeGit:
@@ -39,6 +39,45 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_finished_run_health_does_not_churn_checkpoint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory); day = root/'runs/2026-11-09'; day.mkdir(parents=True)
+            (day/'tencent-daily-import-plan.json').write_text('{"services": []}')
+            before = capture(root, '2026-11-09')
+            (day/'pipeline-summary.json').write_text('{"attempt": 2}')
+            (root/'runs/marketing-expense-notification-state.json').write_text('{"phase":"finished"}')
+            self.assertEqual(before, capture(root, '2026-11-09'))
+            self.assertIn('runs/2026-11-09/tencent-daily-import-plan.json', before['files'])
+            (root/'runs/marketing-expense-notification-state.json').write_text('{"phase":"requires_review"}')
+            self.assertTrue(capture(root, '2026-11-09')['unresolved_guards'])
+
+    def test_checkpoint_lost_ack_is_resolved_without_second_write(self):
+        store, mutex = Mock(), Mock(spec=Mutex)
+        store.publish.side_effect = RuntimeError('lost response')
+        store.read.return_value = ({'files':{}}, {'generation':'saved'})
+        self.assertEqual(commit_checkpoint(store, {'files':{}}, mutex), {'generation':'saved'})
+        store.publish.assert_called_once(); mutex.assert_owned.assert_called_once()
+
+    def test_checkpoint_unknown_mutation_never_retries(self):
+        with TemporaryDirectory() as directory:
+            store, mutex = Mock(), Mock(spec=Mutex)
+            store.api.receipt_dir = Path(directory)
+            (Path(directory)/'request-PENDING.json').write_text('{}')
+            store.publish.side_effect = RuntimeError('lost response')
+            store.read.return_value = ({'old':True}, {})
+            with self.assertRaisesRegex(RuntimeError, 'unknown'):
+                commit_checkpoint(store, {'new':True}, mutex)
+            store.publish.assert_called_once()
+
+    def test_checkpoint_known_old_state_allows_metadata_only_retry(self):
+        with TemporaryDirectory() as directory:
+            store, mutex = Mock(), Mock(spec=Mutex)
+            store.api.receipt_dir = Path(directory)
+            store.publish.side_effect = [RuntimeError('read interrupted'), {'generation':'saved'}]
+            store.read.return_value = ({'old':True}, {})
+            self.assertEqual(commit_checkpoint(store, {'new':True}, mutex), {'generation':'saved'})
+            self.assertEqual(store.publish.call_count, 2)
+
     def test_competing_stale_read_cannot_acquire(self):
         git = FakeGit()
         a, b = Mutex('test/repo', git), Mutex('test/repo', git)
