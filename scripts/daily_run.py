@@ -462,6 +462,7 @@ def main():
                                run_fanqie_rising)
         summary['modules']['project_notifications'] = run_project_notifications(args, summary)
         summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
+        summary['modules']['notification_comparison'] = run_notification_comparison(args, summary)
         summary['modules']['notification_digest'] = run_notification_digest(args, summary)
         summary['notification_delivery'] = run_notification_health(args.shadow)
         summary['process_exit_code'] = pipeline_exit_code(summary)
@@ -478,6 +479,18 @@ def main():
                 ('pipeline-dry-run-summary.json' if args.dry_run else 'pipeline-summary.json'), summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return pipeline_exit_code(summary)
+
+
+def run_notification_comparison(args, summary):
+    if any(m.get('status') in {'failed','blocked','requires_review','source_review_required'}
+           for m in summary['modules'].values()):
+        return {'status':'requires_review','reason':'Await source and expense reconciliation'}
+    try:
+        from scripts.resume_daily_notifications import resume_today
+        api = Base(ROOT/'receipts'/shanghai_day()/('notification-comparison-'+now().strftime('%H%M%S-%f')))
+        return resume_today(args, summary, notification_runtime(args.shadow), ROOT, api)
+    except Exception as exc:
+        return {'status':'requires_review','reason':str(exc)}
 
 
 def run_notification_digest(args, summary):

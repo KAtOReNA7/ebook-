@@ -1,0 +1,4 @@
+{
+  "authorized_dates": {},
+  "policy": "Only explicitly owner-authorized dates; recompute unsent comparisons from verified adjacent observations. Never replay old outboxes."
+}

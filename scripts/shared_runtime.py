@@ -35,6 +35,7 @@ CONFIGS = {
     'service-scope.json', 'source-review-overrides.json', 'tencent-runtime.json',
     'weread-identities-reviewed-2026-11-04.json', 'work-copyright-policy.json',
     'work-metadata-policy.json',
+    'notification-recovery.json',
 }
 ROOT_STATES = {'fanqie-milestones.json',
     'manual-project-registry.json',
@@ -43,6 +44,8 @@ DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-
     'fanqie-state.json','fanqie-effective.json','fanqie-rising-state.json','publisher-recent-state.json',
     'notification-digest-queue.json','notification-digest.apply-state.json','tencent-outbox.json',
     'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
+DAY_STATES.update({'notification-comparison.json','notification-recovery.apply-state.json',
+                   'notification-comparison-projects.json'})
 
 
 def load(path):
@@ -323,9 +326,19 @@ def capture(root, day):
             if digest(evidence.read_bytes()) != entry['evidence_sha256']:
                 raise ValueError('Source service confirmation evidence changed')
             paths.add(evidence)
-    for offset in (0, 1):
-        date = (datetime.fromisoformat(day) - timedelta(days=offset)).date().isoformat()
-        directory = root/'runs'/date
+    days = {(datetime.fromisoformat(day)-timedelta(days=n)).date().isoformat() for n in (0,1)}
+    # Keep pending comparison evidence beyond the two-day rolling window.
+    # Authorized recovery pins its actual observation pair until resolved.
+    policy = root/'config/notification-recovery.json'
+    pinned = set(load(policy).get('authorized_dates',{})) if policy.exists() else set()
+    for path in (root/'runs').glob('*/notification-comparison.json'):
+        paths.add(path)
+        if load(path).get('status') != 'completed': pinned.add(path.parent.name)
+    for value in pinned:
+        parsed = datetime.fromisoformat(value)
+        days.update({value,(parsed-timedelta(days=1)).date().isoformat()})
+    for value in sorted(days):
+        directory = root/'runs'/value
         paths.update(directory/name for name in DAY_STATES)
         for folder in ('tencent-source', 'fanqie-rising'):
             paths.update((directory/folder).glob('*.json'))
