@@ -156,6 +156,13 @@ def recover(args, root, api, runtime):
     if set(queue['events'])-consumed-{r['事件唯一键'] for r in pending}:
         raise RuntimeError('Other unsent events exist; reconcile without replaying old queues')
     groups = digest.build(pending,day)
+    from scripts import daily_reports
+    if daily_reports.enabled(root) and pending:
+        context=read(root/'runs'/day/'daily-report-context.json',{'date':day,'modules':{}})
+        context['modules']['notification_comparison']={k:v for k,v in result.items() if k!='rows'}
+        observations=api.read('每日数据',[['数据日期','==',f'ExactDate({day})']])
+        groups=[daily_reports.event_row(day,'ebook',daily_reports.ebook_body(context,pending,observations),
+                {'member_event_ids':[r['事件唯一键'] for r in pending]},daily.RECIPIENTS)]
     existing = {r['事件唯一键'] for r in records}
     if any(r['事件唯一键'] in existing for r in groups):
         raise RuntimeError('Category already sent with different members; no duplicate category delivery')

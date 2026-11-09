@@ -92,7 +92,11 @@ def sync(data, source, run_kind='local', api=None, recent_tracks=None):
     for book in data['books']:
         key = 'weread:' + str(book['book_id'])
         old = existing.get(key, {})
-        book = apply_work_copyright(book, '营销项目' in old.get('监测范围', []))
+        try:
+            from .weread_copyright import apply_confirmed_copyright
+        except ImportError:
+            from weread_copyright import apply_confirmed_copyright
+        book = apply_work_copyright(apply_confirmed_copyright(book), '营销项目' in old.get('监测范围', []))
         missing = [k for k in ['word_count','copyright_provider','reviewer_count','recommendation_percent','today_reading_count']
                    if book.get(k) is None or book.get(k) == '']
         status = '未开分' if missing == ['recommendation_percent'] else '部分缺失' if missing else '成功'

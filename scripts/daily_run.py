@@ -499,6 +499,9 @@ def run_notification_digest(args, summary):
     except ImportError:
         from notification_digest import flush
     try:
+        from scripts.daily_reports import enabled, flush as report_flush
+        if enabled(ROOT):
+            flush = report_flush
         return flush(args, summary, notification_runtime(args.shadow), ROOT,
                      Base(ROOT / 'receipts' / shanghai_day() / ('notification-digest-' + now().strftime('%H%M%S-%f'))),
                      deliver_event_rows)

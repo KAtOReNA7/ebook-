@@ -42,8 +42,8 @@ def consumed_ids(records):
     result = set()
     for row in records:
         result.add(row['事件唯一键'])
-        if str(row.get('规则ID', '')).startswith('v1:daily_digest:'):
-            result.update(json.loads(row['判定证据'])['member_event_ids'])
+        if str(row.get('规则ID', '')).startswith(('v1:daily_digest:', 'v1:daily_report:')):
+            result.update(json.loads(row['判定证据']).get('member_event_ids',[]))
     return result
 
 

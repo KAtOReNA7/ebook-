@@ -36,6 +36,7 @@ CONFIGS = {
     'weread-identities-reviewed-2026-11-04.json', 'work-copyright-policy.json',
     'work-metadata-policy.json',
     'notification-recovery.json',
+    'weread-copyright-confirmations.json', 'daily-notification-format.json',
 }
 ROOT_STATES = {'fanqie-milestones.json',
     'manual-project-registry.json',
@@ -45,7 +46,8 @@ DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-
     'notification-digest-queue.json','notification-digest.apply-state.json','tencent-outbox.json',
     'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
 DAY_STATES.update({'notification-comparison.json','notification-recovery.apply-state.json',
-                   'notification-comparison-projects.json'})
+                   'notification-comparison-projects.json','daily-report-context.json',
+                   'daily-reports.apply-state.json'})
 
 
 def load(path):
