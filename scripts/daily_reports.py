@@ -61,6 +61,9 @@ def event_row(day,kind,body,evidence,recipients,test=False):
 
 
 def ebook_body(pipeline, pending, daily_rows):
+    labels={'completed':'完成','partial':'部分指标待核','failed':'失败','blocked':'受阻',
+            'requires_review':'待核查','passed':'通过','complete':'完整','success':'成功'}
+    def status(value): return labels.get(value,value or '待核')
     m=pipeline.get('modules',{}); counts=Counter()
     for row in daily_rows:
         values=row.get('平台',[]); values=[values] if isinstance(values,str) else values
@@ -68,10 +71,10 @@ def ebook_body(pipeline, pending, daily_rows):
     t=m.get('tencent',{}); imp=t.get('import',{}); w=m.get('weread',{}); f=m.get('fanqie',{}); r=m.get('fanqie_rising',{}); p=m.get('publisher_recent',{})
     lines=[f'日期：{pipeline["date"]}',
            '一、今日采集与同步',f'已入表日数据：{len(daily_rows)}条（'+ '、'.join(f'{k}{v}条' for k,v in counts.items())+'）',
-           f'腾讯费用表：{t.get("status","待核")}；纳入电子书服务{imp.get("service_rows","待核")}条；费用核对：{imp.get("reconciliation","待核")}；确认金额{imp.get("confirmed_fee_total","待核")}元。',
-           f'微信读书：{w.get("status","待核")}；未完整榜单：{w.get("coverage",{}).get("incomplete_boards","待核")}。',
-           f'番茄作品：已采样{f.get("observations","待核")}本；覆盖状态{f.get("status","待核")}。',
-           f'番茄出版飙升榜：{r.get("count","待核")}名；完整：{r.get("complete",False)}。',
+           f'腾讯费用表：{status(t.get("status"))}；纳入电子书服务{imp.get("service_rows","待核")}条；费用核对：{status(imp.get("reconciliation"))}；确认金额{imp.get("confirmed_fee_total","待核")}元。',
+           f'微信读书：{status(w.get("status"))}；未完整榜单：{w.get("coverage",{}).get("incomplete_boards","待核") or "无"}。',
+           f'番茄作品：已采样{f.get("observations","待核")}本；覆盖状态{status(f.get("status"))}。',
+           f'番茄出版飙升榜：{r.get("count","待核")}名；完整：{"是" if r.get("complete") else "待核"}。',
            f'版权方最近上架：新增{p.get("new_entries","待核")}本；追踪{p.get("active_targets","待核")}本；本次采样{p.get("sampled_books","待核")}本。',
            '\n二、业务变化']
     from scripts.notification_digest import display_detail
