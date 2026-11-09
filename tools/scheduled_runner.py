@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.daily_run import atomic_json, process_lock
 from scripts.initialize_manual_projects import unknown_guard_paths
 from scripts.runner_policy import enforce_writer, host_fingerprint, revision
+from scripts.shared_runtime import configured as shared_configured
 
 TZ = timezone(timedelta(hours=8))
 
@@ -51,9 +52,12 @@ def execute(root, dry_run, cli=None):
         # The child acquires the pipeline's normal lock. This lock serializes wrappers.
         with process_lock(root / 'runs/.native-runner.lock'):
             if not dry_run:
-                config = enforce_writer(root, require_config=True, verify_commit=True)
-                if config.get('previous_writer_stopped') is not True or config.get('target_dry_run_reviewed') is not True:
-                    raise PermissionError('Cutover and target dry-run must be reviewed before activation')
+                if not shared_configured(root):
+                    config = enforce_writer(root, require_config=True, verify_commit=True)
+                    if config.get('previous_writer_stopped') is not True or config.get('target_dry_run_reviewed') is not True:
+                        raise PermissionError('Cutover and target dry-run must be reviewed before activation')
+                # In shared mode the child acquires the global mutex before any
+                # write. The wrapper must not demand a fixed-host lease first.
                 if unknown_guard_paths(root):
                     raise RuntimeError('Unknown/incomplete writes require read-only reconciliation')
             env = {**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUNBUFFERED': '1'}

@@ -122,7 +122,11 @@ def run(args, root=ROOT, api=None, clock=now):
     if state_path.exists():
         prior = read(state_path)['summary']
         if prior.get('status') == 'completed':
-            return {**prior, 'reused_finished': True, 'base_writes': 0}
+            registry = read(root/config['entry_tracking']['registry'])
+            # A reconciled cohort date is authoritative; an old run summary
+            # must not keep reporting weekend entries as new after device recovery.
+            new_today = sum(t['start_date'] == day for t in registry['tracks'].values())
+            return {**prior, 'new_entries': new_today, 'reused_finished': True, 'base_writes': 0}
     registry_path = root/config['entry_tracking']['registry']
     # This operational integration never silently recreates an absent baseline.
     if not registry_path.exists():

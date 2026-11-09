@@ -148,8 +148,12 @@ class Base:
         pending = self.receipt_dir / (stamp + '-PENDING.json')
         if payload is not None:
             save(pending, {'command': command, 'table': table, 'request': str(request), 'state': 'unknown_until_ack_and_readback'})
+        try:
+            from .shared_runtime import transport_env
+        except ImportError:
+            from shared_runtime import transport_env
         result = subprocess.run(args, cwd=ROOT, capture_output=True, encoding='utf-8', timeout=180,
-                                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+                                env={**transport_env(ROOT), 'PYTHONIOENCODING': 'utf-8'})
         (self.receipt_dir / (stamp + '-stdout.json')).write_text(result.stdout, encoding='utf-8')
         (self.receipt_dir / (stamp + '-stderr.txt')).write_text(result.stderr, encoding='utf-8')
         if result.returncode:
@@ -163,7 +167,10 @@ class Base:
         return reply
 
     def read(self, table, conditions=None):
-        flags = {'minimal_stdout': True, 'limit': 2000}
+        page_size = getattr(self, 'read_page_size', 2000)
+        if type(page_size) is not int or not 1 <= page_size <= 2000:
+            raise ValueError('Invalid read page size')
+        flags = {'minimal_stdout': True, 'limit': page_size}
         if conditions:
             filt = self.receipt_dir / (uuid.uuid4().hex + '.filter.json')
             save(filt, {'logic': 'and', 'conditions': conditions})
@@ -232,11 +239,14 @@ class Base:
         new = [r for r in rows if r[key] not in index]
         updates = {index[r[key]]['record_id']: r for r in rows if r[key] in index and update
                    and any(not same(v, self._present(table,index[r[key]]).get(k)) for k, v in r.items())}
-        for i in range(0, len(new), 200):
-            self.call('+record-batch-create', table, {'create_records': new[i:i+200]})
+        batch_size = getattr(self, 'write_batch_size', 200)
+        if type(batch_size) is not int or not 1 <= batch_size <= 200:
+            raise ValueError('Invalid write batch size')
+        for i in range(0, len(new), batch_size):
+            self.call('+record-batch-create', table, {'create_records': new[i:i+batch_size]})
         items = list(updates.items())
-        for i in range(0, len(items), 200):
-            self.call('+record-batch-update', table, {'update_records': dict(items[i:i+200])})
+        for i in range(0, len(items), batch_size):
+            self.call('+record-batch-update', table, {'update_records': dict(items[i:i+batch_size])})
         if new or updates:
             # Acknowledged creates can briefly be absent from filtered lists.
             # Re-read only: never replay a mutation or accept ACK as readback.

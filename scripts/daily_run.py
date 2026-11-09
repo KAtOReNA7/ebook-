@@ -432,17 +432,29 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Reads and local plans only; no Base mutation')
     parser.add_argument('--shadow', action='store_true', help='Force local event outbox only, even if runtime enables notifications')
     args = parser.parse_args()
-    if not args.dry_run:
+    try:
+        from .shared_runtime import session
+        from .runner_policy import enforce_writer
+    except ImportError:
+        from shared_runtime import session
+        from runner_policy import enforce_writer
+    with process_lock(ROOT / 'runs' / '.daily.lock'), session(ROOT, args.dry_run) as shared:
+        if shared and shared.get('skipped'):
+            print(json.dumps({'date': shanghai_day(), 'status': 'already_running_elsewhere',
+                              'shared_runtime': shared, 'process_exit_code': 0}, ensure_ascii=False))
+            return 0
+        if not args.dry_run:
+            enforce_writer(ROOT, verify_commit=True)
         try:
-            from .runner_policy import enforce_writer
+            from .tencent_daily import run as run_tencent
+            from .fanqie_daily import run as run_fanqie
+            from .fanqie_rising_daily import run as run_fanqie_rising
+            from .publisher_recent_daily import run as run_publisher_recent
         except ImportError:
-            from runner_policy import enforce_writer
-        enforce_writer(ROOT, verify_commit=True)
-    with process_lock(ROOT / 'runs' / '.daily.lock'):
-        from tencent_daily import run as run_tencent
-        from fanqie_daily import run as run_fanqie
-        from fanqie_rising_daily import run as run_fanqie_rising
-        from publisher_recent_daily import run as run_publisher_recent
+            from tencent_daily import run as run_tencent
+            from fanqie_daily import run as run_fanqie
+            from fanqie_rising_daily import run as run_fanqie_rising
+            from publisher_recent_daily import run as run_publisher_recent
         args.source_dir = None
         args.identity_map = []
         initialization = run_project_initialization(args)
@@ -456,10 +468,16 @@ def main():
         summary['operational_status'] = {0:'ok', 1:'failed', 2:'requires_review'}[summary['process_exit_code']]
         summary['source_pipeline_finished_at'] = summary.get('finished_at')
         summary['finished_at'] = now().isoformat()
+        if shared is not None:
+            summary['shared_runtime'] = shared
         atomic_json(ROOT / 'runs' / summary.get('date', shanghai_day()) /
                     ('pipeline-dry-run-summary.json' if args.dry_run else 'pipeline-summary.json'), summary)
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
-        return pipeline_exit_code(summary)
+    # The context commits the shared checkpoint and releases the mutex first.
+    # Never print a successful run while its cross-device state is uncommitted.
+    atomic_json(ROOT / 'runs' / summary.get('date', shanghai_day()) /
+                ('pipeline-dry-run-summary.json' if args.dry_run else 'pipeline-summary.json'), summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return pipeline_exit_code(summary)
 
 
 def run_notification_digest(args, summary):

@@ -83,6 +83,8 @@ class SchedulerStatusTests(unittest.TestCase):
     def test_main_returns_scheduler_failure_without_running_real_sources(self):
         fake_module = SimpleNamespace(run=lambda _: None)
         with patch.dict('sys.modules', {'tencent_daily': fake_module, 'fanqie_daily': fake_module}), \
+                patch('scripts.shared_runtime.session', return_value=nullcontext()), \
+                patch('scripts.runner_policy.enforce_writer'), \
                 patch('sys.argv', ['daily_run.py', '--shadow']), \
                 patch('sys.stdout', new_callable=io.StringIO), \
                 patch.object(daily_run, 'process_lock', return_value=nullcontext()), \

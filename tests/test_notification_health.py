@@ -137,6 +137,8 @@ class NotificationHealthTests(unittest.TestCase):
             calls.append('notification_digest')
             return {'status': 'requires_review', 'write_count': 0}
         with patch.dict('sys.modules', {'tencent_daily': fake_module, 'fanqie_daily': fake_module}), \
+                patch('scripts.shared_runtime.session', return_value=nullcontext()), \
+                patch('scripts.runner_policy.enforce_writer'), \
                 patch('sys.argv', ['daily_run.py', '--shadow']), \
                 patch('sys.stdout', new_callable=io.StringIO), \
                 patch.object(daily_run, 'process_lock', return_value=nullcontext()), \

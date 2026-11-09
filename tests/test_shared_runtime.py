@@ -1,0 +1,142 @@
+import copy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from scripts.shared_runtime import Mutex, Store, capture, restore, digest, safe_path, TABLE
+
+
+class FakeGit:
+    def __init__(self):
+        self.commits = {'root': {'message': json.dumps({'schema': 'ebook-mutex.v1', 'phase': 'idle'}),
+                                'tree': {'sha': 'empty'}, 'parents': []}}
+        self.current = 'root'
+
+    def __call__(self, repo, endpoint, payload=None):
+        if endpoint.startswith('ref/'): return {'object': {'sha': self.current}}
+        if endpoint.startswith('commits/'): return self.commits[endpoint.split('/')[-1]]
+        if endpoint == 'commits':
+            sha = str(len(self.commits))
+            self.commits[sha] = {**payload, 'tree': {'sha': payload['tree']}}
+            return {'sha': sha}
+        if endpoint.startswith('refs/heads/'):
+            assert payload['force'] is False
+            if self.commits[payload['sha']]['parents'] != [self.current]:
+                raise RuntimeError('not fast forward')
+            self.current = payload['sha']
+            return {'object': {'sha': self.current}}
+        raise AssertionError(endpoint)
+
+
+class MemoryBase:
+    def __init__(self): self.rows = {}; self.fail_chunks = False
+    def read(self, _): return copy.deepcopy(list(self.rows.values()))
+    def ensure(self, table, key, rows, update=False):
+        if self.fail_chunks and any(r[key] != 'HEAD' for r in rows): raise RuntimeError('interrupted')
+        for row in rows: self.rows[row[key]] = {**row, 'record_id': row[key]}
+
+
+class SharedRuntimeTests(unittest.TestCase):
+    def test_competing_stale_read_cannot_acquire(self):
+        git = FakeGit()
+        a, b = Mutex('test/repo', git), Mutex('test/repo', git)
+        stale = b.head()
+        a.acquire()
+        with self.assertRaisesRegex(RuntimeError, 'not fast forward'):
+            b.transition(stale[0], stale[1], {'schema': 'ebook-mutex.v1', 'phase': 'busy', 'token': 'other'})
+        a.assert_owned()
+        with self.assertRaises(RuntimeError): b.acquire()
+        a.release()
+        b.acquire(); b.assert_owned(); b.release()
+
+    def test_lost_ownership_blocks_write_and_release(self):
+        git = FakeGit(); a = Mutex('test/repo', git); a.acquire()
+        a.token = 'wrong'
+        with self.assertRaises(PermissionError): a.assert_owned()
+        with self.assertRaises(PermissionError): a.release()
+
+    def test_incomplete_checkpoint_does_not_replace_committed_head(self):
+        api = MemoryBase(); store = Store(api)
+        first = {'schema': 'ebook-shared-checkpoint.v1', 'files': {}, 'day': '2026-11-09'}
+        store.publish(first)
+        api.fail_chunks = True
+        with self.assertRaises(RuntimeError): store.publish({**first, 'day': '2026-11-10'})
+        self.assertEqual(store.read()[0], first)
+
+    def test_corrupt_remote_chunk_is_rejected(self):
+        api = MemoryBase(); store = Store(api)
+        store.publish({'schema': 'ebook-shared-checkpoint.v1', 'files': {}})
+        for key, row in api.rows.items():
+            if key != 'HEAD': row['内容'] = 'broken'
+        with self.assertRaises(Exception): store.read()
+
+    def test_rotating_slots_keep_state_rows_bounded(self):
+        api = MemoryBase(); store = Store(api)
+        for day in range(5):
+            value = {'schema':'ebook-shared-checkpoint.v1','files':{},'sequence':day}
+            meta = store.publish(value)
+            self.assertEqual(store.read()[0], value)
+            self.assertEqual(meta['slot'], day % 2)
+        self.assertEqual(len(api.rows), 3)  # HEAD plus two small slots, no unbounded history.
+        self.assertEqual(api.write_batch_size, 20)
+        self.assertEqual(api.read_page_size, 100)
+
+    def test_text_heavy_state_reads_use_bounded_pages(self):
+        from scripts.feishu_io import Base
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            api = object.__new__(Base)
+            api.receipt_dir = root; api.presentation_enabled = False
+            Store(api)
+            calls = []
+            def call(command, table, **flags):
+                calls.append((flags['offset'], flags['limit']))
+                count = 100 if flags['offset'] == 0 else 5
+                rows = [{'record_id': str(flags['offset']+i)} for i in range(count)]
+                (root/flags['output']).write_text('\n'.join(json.dumps(r) for r in rows), encoding='utf-8')
+                return {'has_more': count == 100, 'records_count': count}
+            api.call = call
+            with patch('scripts.feishu_io.ROOT', root):
+                self.assertEqual(len(api.read(TABLE)), 105)
+            self.assertEqual(calls, [(0,100), (100,100)])
+
+    def test_text_heavy_state_writes_split_below_changeset_limit(self):
+        from scripts.feishu_io import Base
+        api = object.__new__(Base); api.presentation_enabled = False
+        api.manifest = {'tables': {TABLE: {'field_readback': {'fields': [
+            {'name':'状态键','type':'text'},{'name':'内容','type':'text'}]}}}}
+        Store(api)
+        stored, sizes = {}, []
+        api.read = lambda *_: copy.deepcopy(list(stored.values()))
+        def call(command, table, payload):
+            rows = payload['create_records']; sizes.append(len(rows))
+            for row in rows: stored[row['状态键']] = {**row,'record_id':row['状态键']}
+        api.call = call
+        api.ensure(TABLE,'状态键',[{'状态键':str(i),'内容':'x'*24000} for i in range(45)])
+        self.assertEqual(sizes,[20,20,5])
+
+    def test_second_computer_restores_exact_bytes_and_preserves_credentials(self):
+        with TemporaryDirectory() as a, TemporaryDirectory() as b:
+            a, b = Path(a), Path(b)
+            (a/'runs').mkdir(); (b/'runs').mkdir(); (b/'config').mkdir()
+            raw = b'{\r\n "tracks": {"42": {"start_date": "2026-11-07"}}\r\n}'
+            (a/'runs/publisher-recent-entry-registry.json').write_bytes(raw)
+            (b/'runs/publisher-recent-entry-registry.json').write_text('{"stale":true}')
+            (b/'config/runner-host.json').write_text('{"role":"development"}')
+            checkpoint = capture(a, '2026-11-09')
+            store = Store(MemoryBase()); store.publish(checkpoint)
+            restore(b, store.read()[0])
+            self.assertEqual((b/'runs/publisher-recent-entry-registry.json').read_bytes(), raw)
+            self.assertEqual(json.loads((b/'config/runner-host.json').read_text())['role'], 'development')
+            self.assertEqual(digest(raw), checkpoint['files']['runs/publisher-recent-entry-registry.json']['sha256'])
+
+    def test_untrusted_paths_and_host_settings_rejected_before_restore(self):
+        with TemporaryDirectory() as root:
+            for name in ('../outside.json', 'config/runner-host.json', 'config/local-system.json',
+                         'research/session.json', 'C:/secret.json', 'runs/../../outside.json'):
+                with self.subTest(name=name), self.assertRaises(ValueError): safe_path(root, name)
+
+
+if __name__ == '__main__': unittest.main()

@@ -24,6 +24,15 @@ def revision(root):
 
 
 def enforce_writer(root, *, require_config=False, verify_commit=False):
+    try:
+        from .shared_runtime import configured, assert_shared_writer
+    except ImportError:
+        from shared_runtime import configured, assert_shared_writer
+    if configured(root):
+        # Shared authorization replaces a fixed machine as the writer. A
+        # development checkout still cannot mutate without the acquired mutex.
+        assert_shared_writer(root)
+        return
     path = Path(root) / 'config/runner-host.json'
     if not path.exists():
         if require_config:

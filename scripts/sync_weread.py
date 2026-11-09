@@ -36,6 +36,23 @@ def present(row):
     return {k: v for k, v in row.items() if v is not None and v != ''}
 
 
+def validate_recent_tracking_dates(existing, books, tracks):
+    """A stale device registry must not restart an already established cohort."""
+    for book in books:
+        book_id = str(book['book_id'])
+        old = existing.get('weread:' + book_id, {})
+        track = tracks[book_id]
+        fields = (('首次进入最近上架日', 'start_date'), ('版权方追踪截止日', 'end_date'))
+        values = [old.get(field) for field, _ in fields]
+        if not any(values):
+            continue  # Existing marketing/ranking book entering this scope for the first time.
+        for field, source in fields:
+            value = old.get(field)
+            if not isinstance(value, str) or value[:10] != track[source]:
+                raise ValueError('Publisher tracking dates conflict for weread:' + book_id
+                                 + '; reconcile the device registry with Base before writing')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', required=True)
@@ -60,6 +77,7 @@ def sync(data, source, run_kind='local', api=None, recent_tracks=None):
     if recent_tracks is not None:
         if data.get('charts') or any(str(b['book_id']) not in recent_tracks for b in data['books']):
             raise ValueError('Recent-list sync requires registered targets and no chart mutations')
+        validate_recent_tracking_dates(existing, data['books'], recent_tracks)
     elif policy().get('enabled'):
         admitted=admitted_weread_keys(data,existing)
         data={**data,'books':[b for b in data['books'] if 'weread:'+str(b['book_id']) in admitted]}

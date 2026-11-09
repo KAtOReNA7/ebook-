@@ -35,7 +35,7 @@ class OwnerOnlyNotifications(unittest.TestCase):
 
     def test_event_transport_rejects_before_any_cli_call(self):
         api = object.__new__(Base)
-        with patch('scripts.feishu_io.subprocess.run') as cli:
+        with patch('scripts.feishu_io.subprocess.run') as cli, patch('scripts.runner_policy.enforce_writer'):
             with self.assertRaises(ValueError):
                 api.call('+record-batch-create', '通知事件',
                          {'create_records': [{'收件人': [{'id': OWNER_ID}, {'id': 'other'}]}]})
