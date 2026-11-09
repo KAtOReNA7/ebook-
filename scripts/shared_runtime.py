@@ -24,6 +24,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 TABLE = '系统运行状态'
+SCHEMA = 'ebook-shared-checkpoint.v2'
 BRANCH = 'codex/runtime-coordination'
 LEASE_ENV = 'EBOOK_SHARED_LEASE'
 FIELDS = [{'name': name, 'type': 'text'} for name in ('状态键', '内容', '校验值')]
@@ -37,6 +38,7 @@ CONFIGS = {
     'work-metadata-policy.json',
     'notification-recovery.json',
     'weread-copyright-confirmations.json', 'daily-notification-format.json',
+    'publisher-business.json',
 }
 ROOT_STATES = {'fanqie-milestones.json',
     'manual-project-registry.json',
@@ -239,7 +241,7 @@ class Store:
         if digest(raw) != meta['sha256']:
             raise RuntimeError('Incomplete or corrupt shared checkpoint')
         data = json.loads(raw)
-        if data.get('schema') != 'ebook-shared-checkpoint.v1':
+        if data.get('schema') not in {'ebook-shared-checkpoint.v1', SCHEMA}:
             raise RuntimeError('Unknown shared checkpoint schema')
         return data, meta
 
@@ -317,8 +319,11 @@ def capture(root, day):
                     yield safe_path(root, value)
             paths.update(references(load(path)))
     provider = root/'config/publisher-newbooks.json'
+    publisher_business = None
     if provider.exists():
-        paths.add(safe_path(root, load(provider)['providers_file']))
+        provider_config=load(provider)
+        paths.add(safe_path(root, provider_config['providers_file']))
+        publisher_business={k:v for k,v in provider_config.items() if k not in {'session_file'}}
     review = root/'config/source-review-overrides.json'
     if review.exists():
         from scripts.local_settings import project_path
@@ -347,7 +352,7 @@ def capture(root, day):
             paths.update((directory/folder).glob('*.jsonp'))
         paths.add(directory/'fanqie/snapshot.json')
         for folder in directory.glob('publisher-recent-*'):
-            paths.update(folder.glob('*.json'))
+            paths.update(folder.rglob('*.json'))
     files = {}
     for path in sorted(paths):
         if not path.is_file(): continue
@@ -356,6 +361,9 @@ def capture(root, day):
         # Preserve raw response bytes exactly: source receipts verify their SHA.
         raw = path.read_bytes()
         files[name] = {'text': raw.decode('utf-8'), 'sha256': digest(raw)}
+    if publisher_business is not None:
+        raw=json.dumps(publisher_business,ensure_ascii=False,sort_keys=True).encode('utf-8')
+        files['config/publisher-business.json']={'text':raw.decode('utf-8'),'sha256':digest(raw)}
     origin = root/'config/workspace-origin.json'
     origins = sorted(set([str(root.resolve()), *(load(origin).get('roots', []) if origin.exists() else [])]))
     from scripts.initialize_manual_projects import unknown_guard_paths
@@ -370,7 +378,7 @@ def capture(root, day):
         for path in (root/'runs').glob('*/'+name):
             if load(path).get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
                 unresolved.append(str(path))
-    return {'schema': 'ebook-shared-checkpoint.v1', 'source_root': origins[0], 'source_roots': origins,
+    return {'schema': SCHEMA, 'source_root': origins[0], 'source_roots': origins,
             'day': day, 'files': files, 'unresolved_guards': unresolved}
 
 
@@ -396,6 +404,14 @@ def restore(root, checkpoint):
         temporary.write_bytes(raw)
         os.replace(temporary, path)
     origin = root/'config/workspace-origin.json'
+    business = root/'config/publisher-business.json'
+    if 'config/publisher-business.json' in checkpoint['files']:
+        local_path=root/'config/publisher-newbooks.json'
+        local=load(local_path) if local_path.exists() else {}
+        merged={**load(business),'session_file':local.get('session_file','.private/weread-session.dpapi')}
+        if local != merged:
+            if local_path.exists(): atomic_json(backup/'config/publisher-newbooks.json',local)
+            atomic_json(local_path,merged)
     roots = load(origin).get('roots', []) if origin.exists() else []
     atomic_json(origin, {'roots': list(dict.fromkeys([checkpoint['source_root'], *checkpoint.get('source_roots', []), *roots]))})
     return len(validated)

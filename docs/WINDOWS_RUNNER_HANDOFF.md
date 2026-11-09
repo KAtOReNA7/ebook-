@@ -1,77 +1,51 @@
-# Windows常开运行电脑与并行开发
+# Windows常开电脑与并行开发
 
-本方案不依赖 Dot 或打开 Codex。Windows任务计划程序每天北京时间10:00
-直接启动现有 Python 采集流程。电脑必须保持开机、联网；关机无法执行。
-任务支持错过时间后启动，但只能记录实际采样时刻，不能补造过去数据。
+现行方案使用全局互斥锁和私有飞书共享检查点，不固定某一台电脑。
+两台已更新、已授权的电脑都可触发每日入口；同一时刻只允许一个写入者。
+每日进度自动恢复，不要求搬运状态包。详见[SHARED_RUNTIME.md](SHARED_RUNTIME.md)。
 
-## 分工
+## 1. 首次配置
 
-| 位置 | 工作 | 飞书写入 |
-| --- | --- | --- |
-| 指定常开电脑 | 固定代码版本、每日采集、同步、私有运行状态 | 唯一活动写入端 |
-| 原电脑及其他开发电脑 | 分支开发、模拟测试、必要时只读dry-run | 禁止业务写入 |
-| Dot | 继续运行环境验证；验证通过前不接管业务 | 禁止业务写入 |
-
-两台电脑可以同时开发和读取，但不能各自执行带写入的每日任务。操作系统
-文件锁只覆盖单机；本项目尚无跨电脑分布式锁和自动故障接管能力。
-`runner-host.json` 的设备/用户绑定用于防误操作，不代替切换时停用旧端。
-也不能约束人工绕过项目直接调用CLI或在飞书界面修改数据。
-
-## 1. 在目标电脑准备
-
-以将来定时任务的Windows账户完成安装和登录。建议运行目录与开发目录分开，
-例如 `D:\ebook-runner` 专门运行，其他目录用于开发，不在运行目录改代码。
+使用运行定时任务的Windows账户，在独立运行目录准备Python3.11以上、飞书CLI、
+GitHub CLI及仓库访问权限。账号登录不能由另一台电脑的DPAPI密文代替。
+Base清单和本地账号身份是首次配置；业务状态以后从共享检查点恢复。
 
 ```powershell
 git clone https://github.com/KAtOReNA7/ebook-.git D:\ebook-runner
 Set-Location D:\ebook-runner
 python -m unittest discover -s tests -t .
 npm install -g @larksuite/cli@1.0.87
-lark-cli --version
 lark-cli auth --help
+gh auth login
 ```
 
-使用Python3.11或更高版本，记录实际 `python.exe`、`lark-cli.cmd` 路径。
-飞书按CLI提示重新授权，确认身份为项目所有者，业务命令使用 `--as user`。
-微信读书也重新扫码授权；即使另一台同为Windows，也不能复制DPAPI会话。
-需要扫码工具时安装 `requirements-dot.txt`，然后执行：
+飞书使用 `--as user`，确认本人身份及项目Base权限。微信读书需本机扫码，
+扫码工具依赖见requirements-dot.txt，运行：
 
 ```powershell
 python tools/weread_login.py login --session-file D:\ebook-private\session.dpapi
 ```
 
-这会生成二维码等待本人确认，不发送测试消息。新设备登录应在正式切换前
-安排，并核查是否影响旧会话。目标私有 `config/publisher-newbooks.json`
-的 `session_file` 改为此目标路径。无需安卓、模拟器或Chrome。
+本机config/publisher-newbooks.json的session_file设为上述本地路径。
+共享上新业务配置不会覆盖这个路径。登录是否挤掉旧会话须实测；会话失效不能被视为空列表。
+无需安装安卓、模拟器或Chrome。凭据、RUNBOOK和业务收据不得进入Git。
 
-## 2. 私有状态交接
-
-GitHub只含代码。费用、作品身份、永久注册表、通知去重、原始证据和RUNBOOK
-通过私有状态包交接，具体校验/恢复步骤见 [HANDOFF.md](HANDOFF.md)。
-包只能私密传输，不传GitHub。目标必须固定到包清单记录的代码提交。
-
-准备期可先交接测试快照；旧端继续运行时，这份快照会过期。正式切换必须
-先停止旧调度及写入，再导出最终状态，不能用旧快照覆盖新状态。
-状态恢复工具强制关闭通知并将角色设为 `standby`，不会启动定时任务。
-
-**公共政策例外**：导出工具不包含公共政策文件。活动端的
-`config/fanqie-ranking.json` 已有用户授权的运行开关，须随私有包另附一份
-原字节文件及SHA256。核对后在目标原位恢复，不能使用Git中默认暂停版本。
-其他公共政策如有本地差异也先逐项核对，不要批量覆盖。
-原通知配置、owner身份及汇总去重必须按最终包保留；仅本人通知，禁止回放。
-
-目标恢复后：
+## 2. 验证自动接续
 
 ```powershell
-python tools/scheduled_runner.py prepare --role standby
-python tools/doctor.py
+python tools/check_shared_runner.py --online
 python tools/scheduled_runner.py run --dry-run --cli C:\实际路径\lark-cli.cmd
 python scripts/verify_current_base.py
 ```
 
-`--shadow`会写业务数据，不能代替dry-run。检查所有来源的完整度、新采样
-时刻、费用合计、guard、关联和通知健康；同日冻结快照不算目标新采集证明。
-目标公网网络、系统代理、飞书和微信会话都要实测。不要为消除错误而删guard。
+只读诊断检查依赖、共享锁、检查点完整性和未知写入保护，不取得锁、不写Base。
+诊断通过不代表所有来源会话有效；daily dry-run才验证采集和计划。
+同日已有冻结样本不算目标设备新采集证明。首次部署还要核对真实来源网络访问。
+
+仅 `--dry-run` 防止Base写入，`--shadow`仍会写入。共享模式无需将runner-host.json
+切换为active。番茄榜单开关、上新业务政策、通知格式、版权核验、追踪及通知去重状态
+均从共享检查点恢复。HANDOFF.md离线包仅用于首次建机/审计，不是每日前提。
+不支持共享锁的旧程序必须停用；v1共享客户端遇到v2检查点会拒绝业务执行，须更新代码。
 
 ## 3. 导出并验证原生定时任务
 
@@ -101,41 +75,27 @@ Codex验证自动执行。最好再测试一次注销后的执行，确认用户
 不自动重试、不强制杀死正在写入的流程；运行异常先核对guard。唤醒受硬件、
 电源策略和供电影响，周末建议接电并关闭自动睡眠，不能只依赖WakeToRun。
 
-## 4. 最后切换为唯一写入端
+## 4. 启用并验收
 
-1. 目标dry-run及全表回读通过；准备好最终代码版本、登录与定时任务。
-2. 原端停用Codex每日任务和所有其他调度，确认没有在途采集/写入。
-3. 导出最终私有状态及活动政策，目标校验后在新鲜目录恢复；重新绑定目标
-   `runner-host.json`，配置路径并确认凭据有效。私有证据不因换路径而改字节。
-4. 原端执行 `python tools/scheduled_runner.py prepare --role development`，
-   作为防误写措施。若已有active策略，先将其角色明确改为development；
-   准备工具不会自动停用active策略。原端以后只模拟测试或dry-run。
-5. 目标确认 `runner-host.json` 的设备指纹是本机、`pinned_commit` 是验收
-   代码提交，再把 `role` 设为 `active`、`previous_writer_stopped` 和
-   `target_dry_run_reviewed` 设为true。这些值必须对应真实完成的切换步骤。
-6. 目标 `runtime.json` 恢复原已核实的owner_only及仅本人通知配置，
-   `production_approved=false`；不能运行旧激活脚本或恢复双收件人。
-7. 用同一导出脚本的 `-Mode Live` 生成正式XML，在任务计划程序导入。
-   核对每天10:00、账户、Python、CLI、目录后启用。保留原端停用证据。
-8. 首次实际执行后全表回读，检查真实采样与去重；不重放历史outbox。
+1. 使用支持共享检查点v2的已测试版本，完成独立登录、只读诊断和dry-run。
+2. 按上节验证Windows调度在关闭Codex、锁屏后的实际运行，必要时验证注销状态。
+3. 使用导出脚本的 `-Mode Live` 生成正式XML，核对账户、路径与每日10:00后启用。
+4. 每台电脑只配置一个每日调度，避免同机Codex和OS重复触发；跨机竞争由全局锁处理。
+5. 首次真实执行核对共享HEAD提交、锁释放、各模块完整度和飞书回读。
 
-## 日常查看及发布新代码
+这不是固定主机切换，不需要每日导出最终状态。调试状态保持production_approved=false，
+通知仅本人；不能恢复旧双收件人配置或回放历史outbox。
 
-每次任务在 `receipts/YYYY-MM-DD/native-runner/<时间-随机号>/` 保存
-`result.json` 与 `pipeline.log`；后者是私有业务日志，不能公开上传。
-入口返回码0表示流程没有已识别的操作故障，**不代表全部作品都有数据**。
-1为流程失败，2通常为待核，3为入口拦截；详细状态看当日
-`runs/YYYY-MM-DD/pipeline-summary.json` 和独立全表回读。
-任务计划程序的“上次运行时间/结果”还要和这些实际文件时间一起检查。
+## 日常运行与代码升级
 
-开发电脑用不同 `codex/…` 分支，模拟测试通过后正常推送、审阅、合并。
-运行电脑不在10点任务内自动 `git pull`。升级在无在途任务时备份私有状态，
-安全更新到已测试提交、dry-run和回读，通过后更新 `pinned_commit`。
-不要用开发电脑的旧runs或旧费用基线覆盖运行电脑。
+操作系统任务必须保持电脑开机联网；关机不能执行。另一台可接续，不补造错过的历史数据。
+日志在receipts/YYYY-MM-DD/native-runner/，返回码0不代表所有作品覆盖完整。
+结合pipeline-summary.json、共享HEAD与实际飞书回读判断完成程度。
 
-目标电脑故障时，先停用它并确认没有写入，再带**最新**状态切换到备用端。
-不能只因为没收到通知就自动启动另一台电脑。缺少最新状态或存在未知写入时，
-先只读对账；不能保证在断电、断网、会话失效等情形下绝不停机。
+开发用独立分支或目录；运行目录不得在采集中修改。每日入口不自动git pull。
+升级前确认无在途进程、保留私有文件和本地差异，安全更新到已测试版本，再进行dry-run。
+不reset、clean、强推或恢复旧stash，也不以旧runs覆盖共享业务进度。
 
-参考：微软 [任务设置](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset)
-与 [任务安全上下文](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)。
+正常跨机续接无需人工交接。若进程在写入中断电、状态不明，全局锁会保留，
+需要依据共享状态和实际飞书记录对账后恢复；不能按超时抢锁或把无通知当成可重发。
+GitHub、飞书不可达或账号失效也会阻断相应阶段，不保证任何故障下绝不停机。

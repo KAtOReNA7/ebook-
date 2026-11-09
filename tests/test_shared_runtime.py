@@ -39,6 +39,49 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_new_checkpoint_version_and_backward_read(self):
+        with TemporaryDirectory() as directory:
+            value = capture(Path(directory), '2026-11-09')
+            self.assertEqual(value['schema'], 'ebook-shared-checkpoint.v2')
+            store = Store(MemoryBase())
+            for schema in ('ebook-shared-checkpoint.v1', 'ebook-shared-checkpoint.v2'):
+                store.publish({**value, 'schema': schema})
+                self.assertEqual(store.read()[0]['schema'], schema)
+            with self.assertRaisesRegex(RuntimeError, 'schema'):
+                store.publish({**value, 'schema': 'ebook-shared-checkpoint.v3'})
+
+    def test_provider_policy_portable_but_session_stays_on_target(self):
+        with TemporaryDirectory() as a, TemporaryDirectory() as b:
+            a, b = Path(a), Path(b)
+            for root in (a, b): (root/'config').mkdir()
+            source = {'enabled': True, 'providers_file': 'research/providers.json',
+                      'session_file': 'E:/private/source-session.dpapi', 'tracking_days': 30}
+            (a/'config/publisher-newbooks.json').write_text(json.dumps(source))
+            target = {'enabled': False, 'session_file': 'D:/private/target-session.dpapi'}
+            (b/'config/publisher-newbooks.json').write_text(json.dumps(target))
+            evidence = a/'runs/2026-11-09/publisher-recent-a/lists/provider.json'
+            evidence.parent.mkdir(parents=True)
+            evidence.write_bytes(b'{\r\n"complete":true\r\n}')
+            checkpoint = capture(a, '2026-11-09')
+            self.assertNotIn('source-session', json.dumps(checkpoint))
+            restore(b, checkpoint)
+            result = json.loads((b/'config/publisher-newbooks.json').read_text())
+            self.assertEqual(result, {**source, 'session_file': target['session_file']})
+            self.assertEqual((b/evidence.relative_to(a)).read_bytes(), evidence.read_bytes())
+
+    def test_notification_unknown_guards_block_on_either_computer(self):
+        from scripts.initialize_manual_projects import unknown_guard_paths
+        with TemporaryDirectory() as directory:
+            root = Path(directory); (root/'runs').mkdir()
+            for name in ('manual-project-events-state.json', 'marketing-expense-notification-state.json'):
+                path = root/'runs'/name
+                path.write_text('{"phase":"requires_review"}')
+                self.assertIn(str(path), unknown_guard_paths(root))
+                checkpoint = capture(root, '2026-11-09')
+                self.assertIn(str(path), checkpoint['unresolved_guards'])
+                path.write_text('{"phase":"finished"}')
+            self.assertEqual(unknown_guard_paths(root), [])
+
     def test_finished_run_health_does_not_churn_checkpoint(self):
         with TemporaryDirectory() as directory:
             root = Path(directory); day = root/'runs/2026-11-09'; day.mkdir(parents=True)

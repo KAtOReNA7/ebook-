@@ -68,7 +68,8 @@ def build_plan(projects, day):
 
 
 def unknown_guard_paths(root):
-    candidates = {root / 'runs' / 'manual-project-init-state.json'}
+    candidates = {root / 'runs' / name for name in ('manual-project-init-state.json',
+                  'manual-project-events-state.json','marketing-expense-notification-state.json')}
     # Manual initialization precedes all other modules, so it must respect
     # identity migrations/imports interrupted outside the daily coordinator.
     for directory in (root / 'receipts', root / 'runs'):
