@@ -66,7 +66,9 @@ def plan(root, day, projects, runtime):
                     'modules':{'scope':{'status':'waiting_evidence','reason':'Missing observation-day project scope'}}}
         # Freeze current-day eligibility. A later marketing entry must not
         # become retroactively eligible for an earlier board notification.
-        scope = {'date':day,'projects':projects}
+        fields = {'record_id','作品唯一键','书名','平台作品ID','平台','作品形式',
+                  '监测范围','磨铁版权确认','作品主页'}
+        scope = {'date':day,'projects':[{k:v for k,v in p.items() if k in fields} for p in projects]}
         daily.atomic_json(scope_path,scope)
     if scope.get('date') != day:
         raise ValueError('Notification project scope date differs')
