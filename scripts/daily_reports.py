@@ -41,12 +41,15 @@ def copyright_summary(snapshot, root):
         heading=f'{BOARDS[cid]}：磨铁上榜{n}本，'+(f'版权方排名No.{rank}' if rank else '无上榜作品，不参与排名')
         if n and sum(v==n for v in counts.values())>1: heading+='（并列）'
         if unknown: heading+=f'；{len(unknown)}本版权待核，以上为已核实口径'
-        ahead=sorted(((k,v) for k,v in counts.items() if v>n),key=lambda x:(-x[1],x[0])) if n else []
-        lines=[heading,'排在磨铁之前：'+('；'.join(f'No.{1+sum(x>v for x in counts.values())} {k}（{v}本）' for k,v in ahead) if ahead else '无' if n else '不适用')]
+        ahead=sorted(((k,v) for k,v in counts.items() if v>n),key=lambda x:(-x[1],x[0]))
+        if not n:
+            ahead=[(k,v) for k,v in ahead if 1+sum(x>v for x in counts.values())<=5]
+        lines=[heading,('排在磨铁之前：' if n else '版权方前5名：')+
+               ('；'.join(f'No.{1+sum(x>v for x in counts.values())} {k}（{v}本）' for k,v in ahead) if ahead else '无')]
         lines += [f'《{clean_title(r["title"])}》｜{BOARDS[cid]}｜第{r["rank"]}名' for r in sorted(motie,key=lambda r:r['rank'])]
         sections.append('\n'.join(lines)); evidence.append({'board':cid,'counts':dict(counts),'motie_count':n,'motie_rank':rank,'unknown':unknown})
     if len(evidence)!=4: raise ValueError('Four complete WeRead boards required')
-    body='按每个榜单的上榜本数排列版权方；相同本数并列，后续名次跳位。跨榜分别统计。\n实际采样：'+snapshot['started_at']+'\n\n'+'\n\n'.join(sections)
+    body='\n\n'.join(sections)
     return body,evidence
 
 
@@ -61,35 +64,23 @@ def event_row(day,kind,body,evidence,recipients,test=False):
 
 
 def ebook_body(pipeline, pending, daily_rows):
-    labels={'completed':'完成','partial':'部分指标待核','failed':'失败','blocked':'受阻',
-            'requires_review':'待核查','passed':'通过','complete':'完整','success':'成功'}
-    def status(value): return labels.get(value,value or '待核')
-    m=pipeline.get('modules',{}); counts=Counter()
-    for row in daily_rows:
-        values=row.get('平台',[]); values=[values] if isinstance(values,str) else values
-        for v in values: counts[v if isinstance(v,str) else v.get('name','未知')]+=1
-    t=m.get('tencent',{}); imp=t.get('import',{}); w=m.get('weread',{}); f=m.get('fanqie',{}); r=m.get('fanqie_rising',{}); p=m.get('publisher_recent',{})
-    lines=[f'日期：{pipeline["date"]}',
-           '一、今日采集与同步',f'已入表日数据：{len(daily_rows)}条（'+ '、'.join(f'{k}{v}条' for k,v in counts.items())+'）',
-           f'腾讯费用表：{status(t.get("status"))}；纳入电子书服务{imp.get("service_rows","待核")}条；费用核对：{status(imp.get("reconciliation"))}；确认金额{imp.get("confirmed_fee_total","待核")}元。',
-           f'微信读书：{status(w.get("status"))}；未完整榜单：{w.get("coverage",{}).get("incomplete_boards","待核") or "无"}。',
-           f'番茄作品：已采样{f.get("observations","待核")}本；覆盖状态{status(f.get("status"))}。',
-           f'番茄出版飙升榜：{r.get("count","待核")}名；完整：{"是" if r.get("complete") else "待核"}。',
-           f'版权方最近上架：新增{p.get("new_entries","待核")}本；追踪{p.get("active_targets","待核")}本；本次采样{p.get("sampled_books","待核")}本。',
-           '\n二、业务变化']
     from scripts.notification_digest import display_detail
-    lines += [f'{i}. {display_detail(row)}' for i,row in enumerate(pending,1)] or ['本次没有可确认的新业务事件。']
+    m=pipeline.get('modules',{})
+    marketing_types={'new_marketing_service','new_project_entry','marketing_expense_changed'}
+    marketing=[r for r in pending if r['事件类型'] in marketing_types]
+    business=[r for r in pending if r['事件类型'] not in marketing_types]
+    blocked={'failed','blocked','requires_review','source_review_required'}
+    marketing_unverified=any(m.get(k,{}).get('status') in blocked for k in
+                            ('tencent','marketing_expense_notifications','project_notifications'))
+    lines=['一、营销变化']
+    lines += [f'{i}. {display_detail(row)}' for i,row in enumerate(marketing,1)] or [
+        '营销变化暂无法核实，不能认定没有变化。' if marketing_unverified else '无']
+    lines += ['\n二、业务变化']
+    lines += [f'{i}. {display_detail(row)}' for i,row in enumerate(business,1)] or ['无已确认的新业务事件。']
     comparison=m.get('notification_comparison',{})
-    gaps=[]
-    for name, module in m.items():
-        if module.get('status') in {'failed','blocked','requires_review','source_review_required'}: gaps.append(name+'：'+str(module.get('reason') or module.get('status')))
-    for name, module in comparison.get('modules',{}).items():
-        if module.get('status','').startswith('waiting_'): gaps.append(name+'：等待比较证据，不能认定没有变化')
-    if imp.get('pending_project_groups'): gaps.append(f'{imp["pending_project_groups"]}本营销作品官方身份仍待核实')
-    missing=w.get('coverage',{}).get('missing_metric_fields',{})
-    if missing: gaps.append(f'微信{len(missing)}本存在未开分或指标缺项，保留空值')
-    lines += ['\n三、待核实事项', '\n'.join(gaps) if gaps else '无新增待处理异常。',
-              '\n数据按实际采样时刻记录；未开分及缺失值不填零，不补造历史。']
+    if comparison.get('status') in blocked or any(v.get('status','').startswith('waiting_')
+                                                for v in comparison.get('modules',{}).values()):
+        lines.append('部分业务变化尚缺比较证据，不能认定没有变化。')
     return '\n'.join(lines)
 
 

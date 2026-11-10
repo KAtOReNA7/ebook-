@@ -6,10 +6,31 @@ from unittest.mock import patch
 
 from scripts import daily_run
 from scripts.feishu_io import Base
-from scripts.notification_policy import OWNER_ID, enforce_recipients
+from scripts.notification_policy import OWNER_ID, enforce_recipients, resend_fingerprint
 
 
 class OwnerOnlyNotifications(unittest.TestCase):
+    def test_explicit_resend_is_exact_and_cannot_expand_future_reports(self):
+        from scripts.daily_reports import event_row
+        from datetime import timezone,timedelta
+        import copy
+        day=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        row=event_row(day,'ebook','approved content',{},[OWNER_ID,'ou_other'])
+        row['事件唯一键']+=':resend:owner-request'
+        with TemporaryDirectory() as directory, patch('scripts.notification_policy.OWNER_CONFIGURED',True):
+            root=Path(directory)
+            entry={'explicit_owner_request':True,'date':day,'request':'Owner requested this resend','sha256':resend_fingerprint(row)}
+            policy={'events':{row['事件唯一键']:entry}}
+            path=root/'config/authorized-report-resends.json'
+            daily_run.atomic_json(path,policy)
+            enforce_recipients(row,root)
+            for field,value in [('通知正文','changed'),('事件唯一键','daily-report:v1:other'),
+                                ('发生日期','2000-01-01 00:00'),('收件人',[{'id':OWNER_ID},{'id':'ou_third'}])]:
+                changed=copy.deepcopy(row); changed[field]=value
+                with self.subTest(field=field),self.assertRaises(ValueError): enforce_recipients(changed,root)
+            entry['completed']=True; daily_run.atomic_json(path,policy)
+            with self.assertRaises(ValueError): enforce_recipients(row,root)
+
     def test_unconfigured_owner_blocks_transport_even_with_matching_placeholder(self):
         with patch('scripts.notification_policy.OWNER_CONFIGURED', False), self.assertRaises(ValueError):
             enforce_recipients({'收件人': [{'id': OWNER_ID}]})
