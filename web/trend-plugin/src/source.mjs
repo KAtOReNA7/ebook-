@@ -6,7 +6,7 @@ export async function loadRows(onProgress) {
   const fields=await table.getFieldMetaList();
   const records=[],ids=new Set(),tokens=new Set();let token;
   for(let page=0;page<500;page++){
-    const result=await table.getRecordsByPage({pageSize:500,...(token===undefined?{}:{pageToken:token}),stringValue:true});
+    const result=await table.getRecordsByPage({pageSize:200,...(token===undefined?{}:{pageToken:token}),stringValue:true});
     for(const r of result.records){if(ids.has(r.recordId))throw Error('分页返回重复记录，请刷新重试');ids.add(r.recordId);records.push(r);}
     onProgress(records.length);
     if(!result.hasMore){if(records.length!==result.total)throw Error('记录未完整读取，请刷新重试');return {rows:normalize(records,fields),count:records.length,tableId:table.id};}
