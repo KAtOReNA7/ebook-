@@ -57,7 +57,11 @@ export function plot(rows,books,selected,range,metric) {
   const eligible=books.filter(b=>selected.includes(b.id)&&b.platform===metric.platform);
   const ids=new Set(eligible.map(b=>b.id));
   const subset=rows.filter(r=>ids.has(r.id)&&r.date>=range.start&&r.date<=range.end);
-  const dates=[...new Set(subset.map(r=>r.date))].sort();
+  const observed=[...new Set(subset.map(r=>r.date))].sort(),dates=[];
+  if(observed.length){
+    const day=new Date(observed[0]+'T00:00:00Z'),last=observed.at(-1);
+    while(day.toISOString().slice(0,10)<=last){dates.push(day.toISOString().slice(0,10));day.setUTCDate(day.getUTCDate()+1);}
+  }
   const values=new Map();for(const r of subset){const k=r.id+'|'+r.date,v=r.values[metric.key];if(values.has(k)&&values.get(k)!==v)throw Error(`同一作品同日存在冲突，暂停绘图：${r.name} ${r.date}`);values.set(k,v);}
   const series=eligible.map(b=>({id:b.id,name:b.label,data:dates.map(d=>values.get(b.id+'|'+d)??null)}));
   return {dates,series,bounds:axisBounds(series.flatMap(s=>s.data),metric.percent),hasValues:series.some(s=>s.data.some(x=>x!==null))};
