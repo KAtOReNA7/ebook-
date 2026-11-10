@@ -25,7 +25,7 @@ class DailyReportTests(unittest.TestCase):
             snapshot['charts'][0]['records']=rows[:-1]
             with self.assertRaises(ValueError): copyright_summary(snapshot,Path(d))
 
-    def test_zero_motie_shows_ranked_top_five_including_ties(self):
+    def test_zero_motie_limits_to_five_providers_even_at_tie_boundary(self):
         providers=['甲']*15+['乙']*10+['丙']*8+['丁']*7+['戊']*4+['己']*4+['庚']*2
         books=[{'book_id':str(i),'copyright_provider':p} for i,p in enumerate(providers)]
         rows=[{'book_id':str(i),'rank':i+1,'title':str(i)} for i in range(50)]
@@ -33,8 +33,8 @@ class DailyReportTests(unittest.TestCase):
         with TemporaryDirectory() as d:
             body,evidence=copyright_summary(snapshot,Path(d))
         self.assertIn('版权方前5名：',body)
-        self.assertIn('No.5 戊（4本）',body)
         self.assertIn('No.5 己（4本）',body)
+        self.assertNotIn('戊',body)
         self.assertNotIn('庚',body)
         self.assertIsNone(evidence[0]['motie_rank'])
 

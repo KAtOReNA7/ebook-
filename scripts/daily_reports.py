@@ -43,7 +43,7 @@ def copyright_summary(snapshot, root):
         if unknown: heading+=f'；{len(unknown)}本版权待核，以上为已核实口径'
         ahead=sorted(((k,v) for k,v in counts.items() if v>n),key=lambda x:(-x[1],x[0]))
         if not n:
-            ahead=[(k,v) for k,v in ahead if 1+sum(x>v for x in counts.values())<=5]
+            ahead=ahead[:5]
         lines=[heading,('排在磨铁之前：' if n else '版权方前5名：')+
                ('；'.join(f'No.{1+sum(x>v for x in counts.values())} {k}（{v}本）' for k,v in ahead) if ahead else '无')]
         lines += [f'《{clean_title(r["title"])}》｜{BOARDS[cid]}｜第{r["rank"]}名' for r in sorted(motie,key=lambda r:r['rank'])]
