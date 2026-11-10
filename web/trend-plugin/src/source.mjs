@@ -1,22 +1,31 @@
-import {bitable,dashboard,DashboardState} from '@lark-base-open/js-sdk';
-import {normalize} from './model.mjs';
-export const configuring=()=>[DashboardState.Create,DashboardState.Config].includes(dashboard.state);
-export async function loadRows(onProgress) {
-  const table=await bitable.base.getTableByName('每日数据');
-  const fields=await table.getFieldMetaList();
-  const records=[],ids=new Set(),tokens=new Set();let token;
-  for(let page=0;page<500;page++){
-    const result=await table.getRecordsByPage({pageSize:200,...(token===undefined?{}:{pageToken:token}),stringValue:true});
-    for(const r of result.records){if(ids.has(r.recordId))throw Error('分页返回重复记录，请刷新重试');ids.add(r.recordId);records.push(r);}
-    onProgress(records.length);
-    if(!result.hasMore){if(records.length!==result.total)throw Error('记录未完整读取，请刷新重试');return {rows:normalize(records,fields),count:records.length,tableId:table.id};}
-    if(result.pageToken===undefined||tokens.has(result.pageToken))throw Error('分页游标异常，未显示不完整数据');
-    tokens.add(result.pageToken);token=result.pageToken;
-  }
-  throw Error('数据量超过当前读取上限，未显示部分结果');
+import {readPages,bookCatalog,selectionFilter,checkedSelection} from './reader.mjs';
+let sdkValue,sdkPromise;
+const sdk=()=>sdkPromise??=(import('@lark-base-open/js-sdk').then(value=>(sdkValue=value)).catch(error=>{sdkPromise=null;throw error;}));
+export const configuring=()=>!!sdkValue&&[sdkValue.DashboardState.Create,sdkValue.DashboardState.Config].includes(sdkValue.dashboard.state);
+const sources=new Map(),cache=new Map();
+async function source(name){
+ if(!sources.has(name))sources.set(name,(async()=>{const {bitable}=await sdk();const table=await bitable.base.getTableByName(name);return {table,fields:await table.getFieldMetaList()};})().catch(e=>{sources.delete(name);throw e;}));
+ return sources.get(name);
 }
-export async function saveComponent(tableId){
-  if(!configuring())throw Error('只允许组件配置状态保存');
-  return dashboard.saveConfig({dataConditions:[],customConfig:{schema:1,tableId,source:'每日数据',readOnly:true}});
+export function invalidate(){cache.clear();sources.clear();}
+export async function loadCatalog(onProgress){
+ const start=performance.now(),{table,fields}=await source('项目总表');
+ const records=await readPages(table,null,onProgress);
+ return {books:bookCatalog(records,fields),seconds:(performance.now()-start)/1000};
 }
-export function rendered(){dashboard.setRendered().catch(()=>{});}
+export async function loadSelection(ids,range,cancelled=()=>false){
+ const key=JSON.stringify([[...ids].sort(),range.start,range.end]),hit=cache.get(key);
+ if(hit&&Date.now()-hit.time<60000)return {...hit.data,cached:true};
+ const start=performance.now(),{table,fields}=await source('每日数据');
+ const records=await readPages(table,selectionFilter(fields,ids,range),undefined,cancelled);
+ const data={rows:checkedSelection(records,fields,ids,range),count:records.length,tableId:table.id,seconds:(performance.now()-start)/1000};
+ if(!cancelled()){if(cache.size>=20)cache.delete(cache.keys().next().value);cache.set(key,{time:Date.now(),data});}
+ return data;
+}
+export async function saveComponent(){
+ if(!configuring())throw Error('只允许组件配置状态保存');
+ const {table}=await source('每日数据');
+ const {dashboard}=await sdk();
+ return dashboard.saveConfig({dataConditions:[],customConfig:{schema:1,tableId:table.id,source:'每日数据',readOnly:true}});
+}
+export function rendered(){sdk().then(({dashboard})=>dashboard.setRendered()).catch(()=>{});}
