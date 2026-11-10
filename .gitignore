@@ -14,6 +14,10 @@
 !/scripts/
 !/tests/
 !/config/
+!/web/
+/web/*
+!/web/trend-plugin/
+/web/trend-plugin/dist/
 /config/*
 !/config/*.example.json
 !/config/copyright-aliases.json

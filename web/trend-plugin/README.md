@@ -1,0 +1,28 @@
+# 飞书内个人趋势组件
+
+以当前访问者的飞书权限只读“每日数据”，分页完整读取后绘图。选书、日期和清空仅在当前组件的 React 内存中，不修改数据、共享切片器或配置。查看者无需编辑项目记录。
+
+- 使用官方 `@lark-base-open/js-sdk`；无服务端、密钥、业务快照或遥测。
+- 展示平台、书名和作者；官方ID仅作为内部系列键，同名版本单独保留。
+- 原始推荐值按所选作品和日期范围自动设置纵轴，保留边距；未开分、缺失值不补零。
+- “一键清空”在当前页面重置所有选择和30天日期，不弹新窗口。
+- 源读取失败或分页不完整时显示错误，不用部分记录冒充全量。
+- 不自动持久化个人选择，也不修改通知或每日采集流程。
+
+## 开发与部署
+
+```powershell
+npm ci --prefix web/trend-plugin --ignore-scripts
+npm test --prefix web/trend-plugin
+npm run build --prefix web/trend-plugin
+npm run dev --prefix web/trend-plugin
+```
+
+只把 `dist/` 作为静态代码部署，严禁加入私有配置/日数据/费用/登录信息。GitHub Pages工作流只上传这个目录。
+飞书“添加组件 → 更多 → 添加自定义插件”填写部署地址，预览后“保存到看板”。首次配置和修改组件需要编辑权限；普通选书/清空不保存共享配置。
+上线需实测真实数据完整读取、推荐值两组不同范围、两页隔离、原地清空以及只读账号可用性；构建或单元测试成功不代表这些验证已完成。
+
+官方接口依据：
+- https://feishu.feishu.cn/docx/Ddacd0miwoNAHax8WGVctD0znOg
+- https://lark-base-team.github.io/js-sdk-docs/zh/
+- https://github.com/Lark-Base-Team/count-down

@@ -44,6 +44,10 @@ def chart_config(platform, metric):
 
 
 def apply(api, state, receipt, source):
+    # This is a historical first-time initializer, not a dashboard updater.
+    # Check BEFORE touching fields/views; current dashboards use private filters.
+    if api.call('+dashboard-list')['data']['items']:
+        raise RuntimeError('Existing dashboard: do not restore retired shared trend selection; see docs/OPERATIONS.md')
     def mutation(command, table=None, payload=None, **flags):
         state['pending'] = {'command': command, 'table': table, 'payload': payload, 'flags': flags}
         save(receipt/'state.json', state)

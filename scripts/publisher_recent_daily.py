@@ -62,7 +62,7 @@ def ensure_schema(api, root):
     if len(found) != 1:
         raise RuntimeError('Recent project view requires reconciliation')
     view = found[0]['id']
-    visible = ['书名', '作者', '版权方', '加入趋势对比', '首次进入最近上架日', '版权方追踪截止日',
+    visible = ['书名', '作者', '版权方', '首次进入最近上架日', '版权方追踪截止日',
                '最新推荐值（微信）', '最新点评人数（微信）', '最新今日阅读人数（微信）', '每日记录', '采集状态', '作品主页']
     filtering = {'logic': 'and', 'conditions': [['平台', 'intersects', ['微信读书']],
                   ['首次进入最近上架日', 'non_empty']]}
