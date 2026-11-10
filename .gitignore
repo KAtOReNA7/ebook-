@@ -8,6 +8,7 @@
 !/pyproject.toml
 !/requirements.txt
 !/requirements-dot.txt
+!/package.json
 !/.github/
 !/docs/
 !/tools/

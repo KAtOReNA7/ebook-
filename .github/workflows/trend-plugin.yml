@@ -22,6 +22,7 @@ jobs:
       - run: npm ci --prefix web/trend-plugin --ignore-scripts
       - run: npm test --prefix web/trend-plugin
       - run: npm run build --prefix web/trend-plugin
+      - run: python tools/package_trend_hosted.py --check
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/trend-plugin/dist

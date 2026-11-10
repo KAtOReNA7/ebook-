@@ -1,0 +1,6 @@
+{
+  "name": "ebook-feishu-trend-hosted",
+  "version": "1.0.0",
+  "private": true,
+  "output": "web/trend-plugin/feishu-dist"
+}
