@@ -11,6 +11,24 @@ except ImportError:
 OWNER_RECIPIENTS = [OWNER_ID]
 
 
+def notification_recipients(root=None):
+    """Resolve after shared restore, never cache a machine's old recipient list."""
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    path = root / 'config/runtime.json'
+    config = json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else {}
+    if config.get('production_approved') is not True:
+        return list(OWNER_RECIPIENTS)
+    approval = config.get('production_authorization', {})
+    ids = config.get('recipient_open_ids')
+    if (config.get('mode') != 'live' or config.get('deployment_stage') != 'production'
+            or approval.get('explicit_owner_request') is not True or not approval.get('request')
+            or not approval.get('accepted_on') or not isinstance(ids, list) or not ids
+            or any(not isinstance(i, str) or not i.startswith('ou_') for i in ids)
+            or OWNER_ID not in ids or len(ids) != len(set(ids))):
+        raise ValueError('Invalid explicitly approved production recipient policy')
+    return list(ids)
+
+
 def resend_fingerprint(row):
     fields=('事件唯一键','事件类型','发生日期','规则ID','通知标题','通知正文','判定证据','关联项目','采集批次')
     value={k:row.get(k) for k in fields}
@@ -36,15 +54,11 @@ def enforce_recipients(row, root=None):
     if not OWNER_CONFIGURED:
         raise ValueError('Missing verified owner in config/local-system.json; notification transport is disabled.')
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
-    path = root / 'config/runtime.json'
-    config = json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else {}
-    allowed = OWNER_RECIPIENTS
-    if config.get('production_approved') is True:
-        allowed = config.get('recipient_open_ids') or OWNER_RECIPIENTS
+    allowed = notification_recipients(root)
     recipients = row.get('收件人') or []
     ids = [person.get('id') if isinstance(person, dict) else None for person in recipients]
     if (ids and all(isinstance(i,str) and i.startswith('ou_') for i in ids)
             and OWNER_ID in ids and len(ids)==len(set(ids)) and authorized_resend(row,root)):
         return
     if len(ids) != len(set(ids)) or set(ids) != set(allowed):
-        raise ValueError('未经用户明确正式通过，通知只能发给' + OWNER_NAME + '本人；禁止其他收件人或空收件人。')
+        raise ValueError('Notification recipients must exactly match the current approved policy; debug is owner-only.')

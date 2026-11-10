@@ -2,6 +2,11 @@
   "mode": "shadow",
   "notifications_enabled": false,
   "production_approved": false,
+  "production_authorization": {
+    "explicit_owner_request": false,
+    "accepted_on": "",
+    "request": ""
+  },
   "production_requires_explicit_user_approval": true,
   "historical_outboxes": "never_replay",
   "notification_scope": "owner_only_until_explicit_acceptance",

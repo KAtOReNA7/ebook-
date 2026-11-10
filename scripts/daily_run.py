@@ -33,11 +33,15 @@ BOARD_NAMES = {'weread_rising': '微信读书飙升榜Top50', 'weread_new': '微
                'weread_female_rising': '女生小说飙升Top50', 'weread_female_new': '女生小说新书Top50'}
 # Verified current user (auth status). Date changes never approve production.
 try:
-    from .notification_policy import OWNER_RECIPIENTS, enforce_recipients
+    from .notification_policy import OWNER_RECIPIENTS, enforce_recipients, notification_recipients as _notification_recipients
 except ImportError:
-    from notification_policy import OWNER_RECIPIENTS, enforce_recipients
+    from notification_policy import OWNER_RECIPIENTS, enforce_recipients, notification_recipients as _notification_recipients
 RECIPIENTS = OWNER_RECIPIENTS
 FIXED_GAPS = ['番茄出版飙升榜由独立 fanqie_rising 模块报告；暂停、缺榜和完整榜分别处理。']
+
+
+def notification_recipients():
+    return _notification_recipients(ROOT)
 
 
 def now():
@@ -52,6 +56,8 @@ def notification_runtime(force_shadow=False):
     enabled = (not force_shadow and eligible_date and config.get('mode') in {'live', 'owner_only'}
                and config.get('notifications_enabled') is True)
     approved = config.get('production_approved') is True
+    if approved:
+        notification_recipients()  # Reject malformed shared policies before any module writes.
     return {'mode': ('live' if approved and config.get('mode') == 'live' else 'owner_only') if enabled else 'shadow',
             'notifications_enabled': enabled, 'production_approved': approved,
             'configured_mode': config.get('mode', 'shadow'), 'effective_from': effective_from}
@@ -275,7 +281,7 @@ def notification_rows(events, projects, batch):
                      '关联项目': [{'id': project['record_id']}], '发生日期': event['observed_date'] + ' 00:00',
                      '规则ID': 'v' + event['rule_version'] + ':' + event['kind'],
                      '判定证据': json.dumps(event, ensure_ascii=False, sort_keys=True),
-                     '通知标题': title, '通知正文': text, '收件人': [{'id': value} for value in RECIPIENTS],
+                     '通知标题': title, '通知正文': text, '收件人': [{'id': value} for value in notification_recipients()],
                      '通知状态': ['待发送'], '采集批次': batch})
     return rows
 

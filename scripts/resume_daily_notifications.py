@@ -162,7 +162,7 @@ def recover(args, root, api, runtime):
         context['modules']['notification_comparison']={k:v for k,v in result.items() if k!='rows'}
         observations=api.read('每日数据',[['数据日期','==',f'ExactDate({day})']])
         groups=[daily_reports.event_row(day,'ebook',daily_reports.ebook_body(context,pending,observations),
-                {'member_event_ids':[r['事件唯一键'] for r in pending]},daily.RECIPIENTS)]
+                {'member_event_ids':[r['事件唯一键'] for r in pending]},daily.notification_recipients())]
     existing = {r['事件唯一键'] for r in records}
     if any(r['事件唯一键'] in existing for r in groups):
         raise RuntimeError('Category already sent with different members; no duplicate category delivery')

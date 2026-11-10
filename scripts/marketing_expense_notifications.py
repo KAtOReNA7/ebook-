@@ -6,14 +6,14 @@ Tencent run never advances it. Unknown event writes stop for reconciliation.
 import json
 from pathlib import Path
 try:
-    from .daily_run import Base, ROOT, RECIPIENTS, atomic_json, now, shanghai_day, create_event_rows
+    from .daily_run import Base, ROOT, notification_recipients, atomic_json, now, shanghai_day, create_event_rows
     from .feishu_io import same
     from .sync_marketing import DOC_KEY, sha
     from .marketing_notice_text import number, service_content
     from .service_scope import enforce_write
     from .local_settings import project_path
 except ImportError:
-    from daily_run import Base, ROOT, RECIPIENTS, atomic_json, now, shanghai_day, create_event_rows
+    from daily_run import Base, ROOT, notification_recipients, atomic_json, now, shanghai_day, create_event_rows
     from feishu_io import same
     from sync_marketing import DOC_KEY, sha
     from marketing_notice_text import number, service_content
@@ -75,7 +75,7 @@ def notification_rows(plan, projects, day):
              '关联项目': [{'id': index[event['project_key']]['record_id']}], '发生日期': day + ' 00:00',
              '规则ID': 'v1:marketing.expense_changed', '判定证据': json.dumps(event, ensure_ascii=False, sort_keys=True),
              '通知标题': '营销费用变更｜' + str(event['title']), '通知正文': service_content(event),
-             '收件人': [{'id': rid} for rid in RECIPIENTS], '通知状态': ['待发送'],
+             '收件人': [{'id': rid} for rid in notification_recipients()], '通知状态': ['待发送'],
              '采集批次': 'marketing-expense:' + day} for event in plan['events']]
 
 

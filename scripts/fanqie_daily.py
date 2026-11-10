@@ -5,13 +5,13 @@ from pathlib import Path
 try:
     from .feishu_io import Base, ROOT
     from .daily_run import (atomic_json, now, shanghai_day, notification_runtime, options,
-                           call_script, create_event_rows, RECIPIENTS)
+                           call_script, create_event_rows, notification_recipients)
     from .rules import _event
     from .work_copyright import apply_work_copyright
 except ImportError:
     from feishu_io import Base, ROOT
     from daily_run import (atomic_json, now, shanghai_day, notification_runtime, options,
-                           call_script, create_event_rows, RECIPIENTS)
+                           call_script, create_event_rows, notification_recipients)
     from rules import _event
     from work_copyright import apply_work_copyright
 
@@ -69,7 +69,7 @@ def event_rows(events,projects,batch):
         rows.append({'事件唯一键':event['event_id'],'事件类型':event['kind'],'关联项目':[{'id':project['record_id']}],
                      '发生日期':event['observed_date']+' 00:00','规则ID':'v1:fanqie_milestone',
                      '判定证据':json.dumps(event,ensure_ascii=False,sort_keys=True),'通知标题':title,'通知正文':text,
-                     '收件人':[{'id':r} for r in RECIPIENTS],'通知状态':['待发送'],'采集批次':batch})
+                     '收件人':[{'id':r} for r in notification_recipients()],'通知状态':['待发送'],'采集批次':batch})
     return rows
 
 

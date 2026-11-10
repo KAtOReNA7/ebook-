@@ -1,4 +1,4 @@
-"""Two owner-only daily reports, replacing per-category delivery."""
+"""Two daily reports using the current approved recipients, replacing per-category delivery."""
 from collections import Counter
 from datetime import date
 import json
@@ -133,9 +133,11 @@ def ebook_body(pipeline, pending, daily_rows):
 
 
 def flush(args,pipeline,runtime,root,api,writer):
-    from scripts.daily_run import atomic_json, RECIPIENTS, shanghai_day
+    from scripts.daily_run import atomic_json, shanghai_day
     from scripts.notification_digest import consumed_ids, load
     from scripts.initialize_manual_projects import unknown_guard_paths
+    from scripts.notification_policy import notification_recipients
+    recipients = notification_recipients(root)
     day=pipeline['date']; directory=Path(root)/'runs'/day
     if day!=shanghai_day(): raise ValueError('Historical report requires explicit recovery entry')
     if unknown_guard_paths(Path(root)): return {'status':'requires_review','reason':'Unknown mutation; reconcile first','write_count':0}
@@ -145,9 +147,9 @@ def flush(args,pipeline,runtime,root,api,writer):
     daily_rows=api.read('每日数据',[['数据日期','==',f'ExactDate({day})']])
     if not args.dry_run:
         atomic_json(directory/'daily-report-context.json',pipeline)
-    rows=[event_row(day,'ebook',ebook_body(pipeline,pending,daily_rows),{'member_event_ids':[r['事件唯一键'] for r in pending]},RECIPIENTS)]
+    rows=[event_row(day,'ebook',ebook_body(pipeline,pending,daily_rows),{'member_event_ids':[r['事件唯一键'] for r in pending]},recipients)]
     body,evidence=summary_body(root,day)
-    rows.append(event_row(day,'weread',body,evidence,RECIPIENTS))
+    rows.append(event_row(day,'weread',body,evidence,recipients))
     existing={r['事件唯一键'] for r in records}; missing=[r for r in rows if r['事件唯一键'] not in existing]
     if rows[0]['事件唯一键'] in existing and pending:
         return {'status':'requires_review','reason':'Daily report already sent; additional events retained, no duplicate report','write_count':0}

@@ -10,14 +10,14 @@ from pathlib import Path
 
 try:
     from .daily_run import (ROOT, Base, atomic_json, process_lock, shanghai_day, now,
-                            notification_runtime, create_event_rows, RECIPIENTS, options, call_script)
+                            notification_runtime, create_event_rows, notification_recipients, options, call_script)
     from .sync_marketing import plan_import, apply_plan, identities_from_file, sha, DOC_KEY
     from .prepare_tencent_rows import build
     from .marketing_notice_text import service_content
     from .local_settings import project_path
 except ImportError:
     from daily_run import (ROOT, Base, atomic_json, process_lock, shanghai_day, now,
-                           notification_runtime, create_event_rows, RECIPIENTS, options, call_script)
+                           notification_runtime, create_event_rows, notification_recipients, options, call_script)
     from sync_marketing import plan_import, apply_plan, identities_from_file, sha, DOC_KEY
     from prepare_tencent_rows import build
     from marketing_notice_text import service_content
@@ -80,7 +80,7 @@ def event_rows(events, projects, batch):
         rows.append({'事件唯一键': event['event_id'], '事件类型': event['kind'],
                      '关联项目': [{'id': project['record_id']}], '发生日期': event['observed_date'] + ' 00:00',
                      '规则ID': 'v1:marketing.new_service', '判定证据': json.dumps(event, ensure_ascii=False, sort_keys=True),
-                     '通知标题': title, '通知正文': content, '收件人': [{'id': value} for value in RECIPIENTS],
+                     '通知标题': title, '通知正文': content, '收件人': [{'id': value} for value in notification_recipients()],
                      '通知状态': ['待发送'], '采集批次': batch})
     return rows
 

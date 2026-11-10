@@ -12,7 +12,7 @@ try:
     from .collect_fanqie import Archive
     from .collect_fanqie_rising import collect, discover, normalize, ranking_archive, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
     from .daily_run import (ROOT, now, shanghai_day, atomic_json, options,
-                            notification_runtime, create_event_rows, RECIPIENTS)
+                            notification_runtime, create_event_rows, notification_recipients)
     from .feishu_io import Base
     from .initialize_manual_projects import unknown_guard_paths
     from .rules import _event
@@ -20,7 +20,7 @@ except ImportError:
     from collect_fanqie import Archive
     from collect_fanqie_rising import collect, discover, normalize, ranking_archive, BOARD_NAME, HOST, DIRECTORY_PATH, RANK_PATH
     from daily_run import (ROOT, now, shanghai_day, atomic_json, options,
-                           notification_runtime, create_event_rows, RECIPIENTS)
+                           notification_runtime, create_event_rows, notification_recipients)
     from feishu_io import Base
     from initialize_manual_projects import unknown_guard_paths
     from rules import _event
@@ -187,7 +187,7 @@ def notification_rows(events, projects, batch):
                      '通知标题': title,
                      '通知正文': title+'\n'+rank+'\n'+event['meaning']+
                      '\n实际采样区间：'+event['previous_observed_at']+' 至 '+event['current_observed_at'],
-                     '收件人': [{'id': r} for r in RECIPIENTS],
+                     '收件人': [{'id': r} for r in notification_recipients()],
                      '通知状态': ['待发送'], '采集批次': batch})
     return rows
 

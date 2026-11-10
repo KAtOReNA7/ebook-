@@ -11,10 +11,10 @@ import json
 from pathlib import Path
 
 try:
-    from .daily_run import Base, ROOT, RECIPIENTS, atomic_json, options, shanghai_day, now, create_event_rows
+    from .daily_run import Base, ROOT, notification_recipients, atomic_json, options, shanghai_day, now, create_event_rows
     from .sync_marketing import sha
 except ImportError:
-    from daily_run import Base, ROOT, RECIPIENTS, atomic_json, options, shanghai_day, now, create_event_rows
+    from daily_run import Base, ROOT, notification_recipients, atomic_json, options, shanghai_day, now, create_event_rows
     from sync_marketing import sha
 
 SCHEMA = 'project-new-record-registry.v1'
@@ -102,7 +102,8 @@ def build_plan(projects, previous, day, tencent_project_ids=()):
                 'last_observed_date': day, 'seen_record_ids': sorted(seen | (set(index) - deferred))}}
 
 
-def notification_rows(plan, batch, recipients=RECIPIENTS):
+def notification_rows(plan, batch, recipients=None):
+    recipients = notification_recipients() if recipients is None else recipients
     rows = []
     for event in plan['events']:
         title = '项目新增记录｜' + event['title']

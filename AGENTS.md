@@ -3,9 +3,13 @@
 Read README.md and docs/DEVELOPMENT.md first. On an existing operational
 checkout, also read the private RUNBOOK.md and config/runtime.json.
 
-- This system is in debugging until its owner explicitly accepts production.
-  Only the verified owner may receive debug notifications. Do not expand the
-  recipients, replay historical outboxes, send direct IM, or send test messages.
+- The owner explicitly accepted production on 2026-11-10. Operational runners
+  restore the approved private recipient roster from the v5 shared checkpoint;
+  use config/runtime.json as authority, not names or cached IDs from old docs.
+  Unaccepted/development deployments remain owner-only. Never expand the approved
+  roster, replay historical outboxes, send direct IM, or send test messages.
+  The two same-day production-launch reports are a one-time authorized resend;
+  their completed guard must prevent repetition on another computer.
 - Formal data is ebook-only. Audio and unknown service media stay excluded;
   a corresponding ebook ID does not admit an audio expense.
 - Fanqie publication rising daily integration was authorized on 2026-11-06. Use
