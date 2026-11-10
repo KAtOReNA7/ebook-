@@ -1,15 +1,70 @@
 import json
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from scripts.daily_reports import copyright_summary, event_row, ebook_body
+from scripts.daily_reports import copyright_summary, event_row, ebook_body, fanqie_summary, summary_body
 from scripts.weread_copyright import apply_confirmed_copyright
 from scripts.notification_digest import consumed_ids
 
 
 class DailyReportTests(unittest.TestCase):
+    def fanqie_fixture(self, root, providers):
+        path=root/'runs/2026-11-10/fanqie-rising'; path.mkdir(parents=True)
+        rows=[{'book_id':str(i),'rank':i+1,'title':'书'+str(i)} for i in range(100)]
+        books=[{'book_id':r['book_id'],'copyright_info':
+                '版权信息：本书的数字版权由 '+p+' 提供并授权发行，如有任何疑问，请通过“我的-意见反馈”告知我们'
+                if p else ''} for r,p in zip(rows,providers)]
+        raw=json.dumps({'data':{'cell_view':{'book_data':books}}}).encode()
+        (path/'ranking.json').write_bytes(raw)
+        return {'books':rows,'ranking_source':{'response_sha256':hashlib.sha256(raw).hexdigest()}}
+
+    def test_fanqie_uses_all_100_copyright_declarations_without_marketing_filter(self):
+        with TemporaryDirectory() as d:
+            root=Path(d)
+            snap=self.fanqie_fixture(root,['磨铁图书','磨铁数盟','磨铁','非磨铁合作方']+['其他']*96)
+            with patch('scripts.fanqie_rising_daily.verified_snapshot',return_value=snap):
+                body,evidence=fanqie_summary(root,'2026-11-10')
+            self.assertTrue(evidence['complete'])
+            self.assertEqual(evidence['motie_count'],3)
+            self.assertIn('《书0》｜第1名',body)
+            self.assertNotIn('书3',body)
+            self.assertNotIn('版权方排名',body)
+            self.assertEqual(len(evidence['copyright_declarations']),100)
+
+    def test_fanqie_zero_only_when_all_copyrights_verified(self):
+        for missing in (False,True):
+            with TemporaryDirectory() as d:
+                root=Path(d); snap=self.fanqie_fixture(root,([''] if missing else ['其他'])+['其他']*99)
+                with patch('scripts.fanqie_rising_daily.verified_snapshot',return_value=snap):
+                    body,evidence=fanqie_summary(root,'2026-11-10')
+                self.assertEqual(evidence['complete'],not missing)
+                if missing:
+                    self.assertIn('版权待核',body)
+                    self.assertNotEqual(body,'出版飙升榜：无')
+                else: self.assertEqual(body,'出版飙升榜：无')
+
+    def test_summary_preserves_weread_when_fanqie_incomplete_and_stable_daily_key(self):
+        with patch('scripts.daily_reports.complete_weread',return_value={}), \
+             patch('scripts.daily_reports.copyright_summary',return_value=('微信四榜',[])), \
+             patch('scripts.fanqie_rising_daily.verified_snapshot',side_effect=ValueError('incomplete')):
+            body,evidence=summary_body(Path('.'),'2026-11-10')
+        self.assertIn('一、微信读书\n微信四榜',body)
+        self.assertIn('二、番茄小说',body)
+        self.assertFalse(evidence['fanqie_publication_rising']['complete'])
+        row=event_row('2026-11-10','weread',body,evidence,['owner'])
+        self.assertEqual(row['通知标题'],'《2026年11月10日电子书汇总》')
+        self.assertEqual(row['事件唯一键'],'daily-report:v1:2026-11-10:weread')
+
+    def test_fanqie_rejects_changed_raw_evidence(self):
+        with TemporaryDirectory() as d:
+            root=Path(d); snap=self.fanqie_fixture(root,['其他']*100)
+            (root/'runs/2026-11-10/fanqie-rising/ranking.json').write_text('{}')
+            with patch('scripts.fanqie_rising_daily.verified_snapshot',return_value=snap):
+                with self.assertRaises(ValueError):fanqie_summary(root,'2026-11-10')
+
     def test_ranks_ties_and_zero(self):
         books=[{'book_id':str(n),'title':str(n),'copyright_provider':('磨铁数盟' if n<=10 else '甲' if n<=20 else '乙')} for n in range(1,51)]
         rows=[{'book_id':str(n),'title':str(n),'rank':n} for n in range(1,51)]

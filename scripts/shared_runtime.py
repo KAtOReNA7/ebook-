@@ -24,7 +24,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 TABLE = '系统运行状态'
-SCHEMA = 'ebook-shared-checkpoint.v3'
+SCHEMA = 'ebook-shared-checkpoint.v4'
 BRANCH = 'codex/runtime-coordination'
 LEASE_ENV = 'EBOOK_SHARED_LEASE'
 FIELDS = [{'name': name, 'type': 'text'} for name in ('状态键', '内容', '校验值')]
@@ -50,7 +50,8 @@ DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-
     'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
 DAY_STATES.update({'notification-comparison.json','notification-recovery.apply-state.json',
                    'notification-comparison-projects.json','daily-report-context.json',
-                   'daily-reports.apply-state.json','report-resend.apply-state.json'})
+                   'daily-reports.apply-state.json','report-resend.apply-state.json',
+                   'report-summary-resend.apply-state.json'})
 
 
 def load(path):
@@ -242,7 +243,7 @@ class Store:
         if digest(raw) != meta['sha256']:
             raise RuntimeError('Incomplete or corrupt shared checkpoint')
         data = json.loads(raw)
-        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2',SCHEMA}:
+        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3',SCHEMA}:
             raise RuntimeError('Unknown shared checkpoint schema')
         return data, meta
 

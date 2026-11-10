@@ -2,6 +2,8 @@
 from collections import Counter
 from datetime import date
 import json
+import hashlib
+import re
 from pathlib import Path
 from scripts.presentation import short_copyright, clean_title
 from scripts.weread_copyright import apply_confirmed_copyright
@@ -54,13 +56,59 @@ def copyright_summary(snapshot, root):
 
 
 def event_row(day,kind,body,evidence,recipients,test=False):
-    label='微信读书汇总' if kind=='weread' else '电子书明细'
+    # Keep the original key/kind: renaming a report must not create a third daily message.
+    label='电子书汇总' if kind=='weread' else '电子书明细'
     if len(body.encode('utf-8'))>24000: raise ValueError('Report exceeds message size; no truncation or extra messages')
     return {'事件唯一键':f'daily-report:v1:{day}:{kind}'+(':test' if test else ''),
             '事件类型':'日报测试' if test else label,'关联项目':[], '发生日期':day+' 00:00',
             '规则ID':'v1:daily_report:'+kind,'判定证据':json.dumps(evidence,ensure_ascii=False,sort_keys=True),
             '通知标题':title(day,label),'通知正文':('【本次为你授权的一条格式测试】\n' if test else '')+body,
             '收件人':[{'id':r} for r in recipients],'通知状态':['待发送'],'采集批次':'daily-report:'+day}
+
+
+def fanqie_summary(root, day):
+    """Use every publisher declaration in the verified Top100, not marketing scope."""
+    from scripts.fanqie_rising_daily import verified_snapshot
+    path=Path(root)/'runs'/day/'fanqie-rising/snapshot.json'
+    snapshot=verified_snapshot(path,day)
+    raw=path.with_name('ranking.json').read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=snapshot['ranking_source']['response_sha256']:
+        raise ValueError('Fanqie ranking evidence changed during report generation')
+    books=json.loads(raw)['data']['cell_view']['book_data']
+    declared={str(b['book_id']):b.get('copyright_info') for b in books}
+    if len(declared)!=100 or set(declared)!={r['book_id'] for r in snapshot['books']}:
+        raise ValueError('Fanqie copyright scope differs from complete ranking')
+    providers=[]; motie=[]; unknown=[]
+    for row in sorted(snapshot['books'],key=lambda r:r['rank']):
+        text=declared[row['book_id']]
+        match=re.fullmatch(r'版权信息：本书的数字版权由\s*(.+?)\s*提供并授权发行，如有任何疑问，请通过“我的-意见反馈”告知我们',text or '')
+        provider=match.group(1).strip() if match else None
+        providers.append({'book_id':row['book_id'],'copyright_raw':text,'copyright_provider':provider})
+        if provider is None: unknown.append(row['book_id'])
+        elif provider in {'磨铁','磨铁数盟','磨铁图书'}: motie.append(row)
+    lines=[f'出版飙升榜：磨铁上榜{len(motie)}本' if motie else '出版飙升榜：无']
+    if unknown:
+        lines=[f'出版飙升榜：已核实磨铁上榜{len(motie)}本，另有{len(unknown)}本版权待核，暂不能确认完整数量。']
+    lines += [f'《{clean_title(r["title"])}》｜第{r["rank"]}名' for r in motie]
+    return '\n'.join(lines),{'complete':not unknown,'ranking_count':100,'motie_count':len(motie),
+                             'motie_books':motie,'unknown':unknown,'copyright_declarations':providers,
+                             'ranking_source':snapshot['ranking_source']}
+
+
+def summary_body(root, day):
+    try:
+        snapshot=complete_weread(weread_path(Path(root),day),day)
+        weread,weread_evidence=copyright_summary(snapshot,root)
+    except (ValueError,OSError) as exc:
+        weread='四榜汇总暂无法完整核实，未将缺榜视为零上榜。'
+        weread_evidence={'incomplete':True,'reason':str(exc)}
+    try:
+        fanqie,fanqie_evidence=fanqie_summary(root,day)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        fanqie='出版飙升榜暂无法完整核实，未将缺榜或版权缺失视为无上榜。'
+        fanqie_evidence={'complete':False,'reason':str(exc)}
+    return ('一、微信读书\n'+weread+'\n\n二、番茄小说\n'+fanqie,
+            {'copyright_ranking':weread_evidence,'fanqie_publication_rising':fanqie_evidence,'member_event_ids':[]})
 
 
 def ebook_body(pipeline, pending, daily_rows):
@@ -98,12 +146,8 @@ def flush(args,pipeline,runtime,root,api,writer):
     if not args.dry_run:
         atomic_json(directory/'daily-report-context.json',pipeline)
     rows=[event_row(day,'ebook',ebook_body(pipeline,pending,daily_rows),{'member_event_ids':[r['事件唯一键'] for r in pending]},RECIPIENTS)]
-    try:
-        snapshot=complete_weread(weread_path(Path(root),day),day)
-        body,evidence=copyright_summary(snapshot,root)
-    except (ValueError,OSError) as exc:
-        body='四榜汇总暂无法完整核实：'+str(exc)+'\n未将缺榜视为零上榜。'; evidence={'incomplete':True,'reason':str(exc)}
-    rows.append(event_row(day,'weread',body,{'copyright_ranking':evidence,'member_event_ids':[]},RECIPIENTS))
+    body,evidence=summary_body(root,day)
+    rows.append(event_row(day,'weread',body,evidence,RECIPIENTS))
     existing={r['事件唯一键'] for r in records}; missing=[r for r in rows if r['事件唯一键'] not in existing]
     if rows[0]['事件唯一键'] in existing and pending:
         return {'status':'requires_review','reason':'Daily report already sent; additional events retained, no duplicate report','write_count':0}
