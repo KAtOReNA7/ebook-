@@ -32,3 +32,14 @@ npm run dev --prefix web/trend-plugin
 - https://feishu.feishu.cn/docx/Ddacd0miwoNAHax8WGVctD0znOg
 - https://lark-base-team.github.io/js-sdk-docs/zh/
 - https://github.com/Lark-Base-Team/count-down
+
+## 正式看板托管（2026-11-10）
+
+为改善其他成员首次打开慢的问题，正式看板现使用飞书开发者中心部署的静态资源，GitHub Pages仅保留为预览/回退入口。个人可见插件上架用于生成官方托管代码；现有看板组件仅替换服务地址，未改变Base访问权限或增加组件。
+
+- 开发者中心商品：电子书运营趋势对比（仪表盘插件、免费、本人可见）。
+- 部署源代码：本仓库根目录 `package.json` 的 `output`。
+- 当前入口：`https://ext.baseopendev.com/ext/KAtOReNA7_ebook-_1794296309789_145/1794296341395/index.html`
+- 更新步骤：测试 → build → 打包托管副本 → GitHub同步/CI → 开发者中心更新并发布 → 验证托管预览 → 持共享锁替换原组件服务地址 → 刷新回读 → 释放锁。GitHub提交本身不会自动替换已发布的飞书版本。
+- 现场验证：622本目录两次读取约0.6秒和2.4秒，单书8条约0.1秒；两书16条、单日2条筛选及动态纵轴通过。耗时只代表本机已有登录会话，不能当作其他成员网络或只读账号验收。
+- 飞书托管依据：[官方迁移说明](https://bytedance.larkoffice.com/wiki/E9JawjBhXiHMcKkubEpcmdOjnfe)。
