@@ -10,6 +10,27 @@ from scripts.notification_policy import OWNER_ID, enforce_recipients, resend_fin
 
 
 class OwnerOnlyNotifications(unittest.TestCase):
+    def test_exact_authorized_copy_can_exclude_owner_without_changing_daily_roster(self):
+        from scripts.daily_reports import event_row
+        from scripts.notification_policy import notification_recipients
+        from datetime import timezone,timedelta
+        day=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        row=event_row(day,'ebook','same daily report',{},['ou_verified_a','ou_verified_b'])
+        row['事件唯一键']+=':resend:explicit-extra-recipients'
+        with TemporaryDirectory() as directory, patch('scripts.notification_policy.OWNER_CONFIGURED',True):
+            root=Path(directory)
+            with self.assertRaises(ValueError): enforce_recipients(row,root)
+            entry={'explicit_owner_request':True,'date':day,'request':'Copy only to these two people',
+                   'sha256':resend_fingerprint(row)}
+            path=root/'config/authorized-report-resends.json'
+            daily_run.atomic_json(path,{'events':{row['事件唯一键']:entry}})
+            enforce_recipients(row,root)
+            self.assertEqual(notification_recipients(root),[OWNER_ID])
+            with self.assertRaises(ValueError):
+                enforce_recipients({**row,'收件人':row['收件人']+[{'id':OWNER_ID}]},root)
+            entry['completed']=True; daily_run.atomic_json(path,{'events':{row['事件唯一键']:entry}})
+            with self.assertRaises(ValueError): enforce_recipients(row,root)
+
     def test_explicit_resend_is_exact_and_cannot_expand_future_reports(self):
         from scripts.daily_reports import event_row
         from datetime import timezone,timedelta
