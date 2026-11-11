@@ -25,7 +25,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 TABLE = '系统运行状态'
-SCHEMA = 'ebook-shared-checkpoint.v7'
+SCHEMA = 'ebook-shared-checkpoint.v8'
 BRANCH = 'codex/runtime-coordination'
 LEASE_ENV = 'EBOOK_SHARED_LEASE'
 FIELDS = [{'name': name, 'type': 'text'} for name in ('状态键', '内容', '校验值')]
@@ -244,7 +244,7 @@ class Store:
         if digest(raw) != meta['sha256']:
             raise RuntimeError('Incomplete or corrupt shared checkpoint')
         data = json.loads(raw)
-        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6',SCHEMA}:
+        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7',SCHEMA}:
             raise RuntimeError('Unknown shared checkpoint schema')
         return data, meta
 
@@ -387,6 +387,16 @@ def capture(root, day):
         for path in (root/'runs').glob('*/'+name):
             if load(path).get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
                 unresolved.append(str(path))
+    # Persist interrupted guards and their neighbouring JSON plans for remote
+    # reconciliation. Guard paths alone cannot reconstruct an unknown write.
+    for name in set(unresolved):
+        path=Path(name)
+        if not path.is_absolute():path=root/path
+        for item in [path, *path.parent.glob('*.json')]:
+            rel=item.resolve().relative_to(root.resolve()).as_posix()
+            safe_path(root,rel)
+            if item.is_file():
+                raw=item.read_bytes();files[rel]={'text':raw.decode('utf-8'),'sha256':digest(raw)}
     return {'schema': SCHEMA, 'source_root': origins[0], 'source_roots': origins,
             'day': day, 'files': files, 'unresolved_guards': unresolved}
 
@@ -456,7 +466,7 @@ def restore(root, checkpoint, day=None):
 
 
 @contextmanager
-def session(root, dry_run=False):
+def session(root, dry_run=False, staged=False):
     if not configured(root):
         yield None
         return
@@ -469,6 +479,8 @@ def session(root, dry_run=False):
     config = configuration(root)
     mutex = Mutex(config['coordination_repository'])
     old_env = os.environ.get(LEASE_ENV)
+    from scripts.stage_checkpoint import ENV as STAGE_ENV, StageStore, require_settled, start
+    old_stage = os.environ.pop(STAGE_ENV, None)
     acquired = False
     entered = False
     try:
@@ -482,9 +494,12 @@ def session(root, dry_run=False):
         api = Base(root/'receipts'/shanghai_day()/('shared-state-'+uuid.uuid4().hex))
         store = Store(api).discover()
         checkpoint, meta = store.read()
+        journal, _ = StageStore(api).read()
+        require_settled(root,checkpoint,meta['generation'],journal)
         if checkpoint.get('unresolved_guards'):
             raise RuntimeError('Shared checkpoint has unresolved mutations; reconcile from server evidence')
         restore(root, checkpoint, shanghai_day())
+        if staged and not dry_run:start(root,checkpoint,meta,os.environ[LEASE_ENV])
         entered = True
         result = {'generation': meta['generation'], 'restored_files': len(checkpoint['files'])}
         yield result
@@ -500,3 +515,5 @@ def session(root, dry_run=False):
             mutex.release()  # Reads/cache preparation only; no business mutation was started.
         if old_env is None: os.environ.pop(LEASE_ENV, None)
         else: os.environ[LEASE_ENV] = old_env
+        if old_stage is None:os.environ.pop(STAGE_ENV,None)
+        else:os.environ[STAGE_ENV]=old_stage

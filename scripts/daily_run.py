@@ -447,7 +447,8 @@ def main():
     except ImportError:
         from shared_runtime import session
         from runner_policy import enforce_writer
-    with process_lock(ROOT / 'runs' / '.daily.lock'), session(ROOT, args.dry_run) as shared:
+    from scripts.stage_checkpoint import run_stage
+    with process_lock(ROOT / 'runs' / '.daily.lock'), session(ROOT, args.dry_run, staged=True) as shared:
         if shared and shared.get('skipped'):
             print(json.dumps({'date': shanghai_day(), 'status': 'already_running_elsewhere',
                               'shared_runtime': shared, 'process_exit_code': 0}, ensure_ascii=False))
@@ -466,15 +467,15 @@ def main():
             from publisher_recent_daily import run as run_publisher_recent
         args.source_dir = None
         args.identity_map = []
-        initialization = run_project_initialization(args)
+        initialization = run_stage(ROOT,'project_initialization',run_project_initialization,args)
         summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization, run_publisher_recent,
                                run_fanqie_rising)
-        summary['modules']['project_notifications'] = run_project_notifications(args, summary)
-        summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
-        summary['modules']['notification_comparison'] = run_notification_comparison(args, summary)
-        summary['modules']['report_validation'] = run_report_validation(args, summary)
-        summary['modules']['notification_digest'] = run_notification_digest(args, summary)
-        summary['notification_delivery'] = run_notification_health(args.shadow)
+        for name,runner in [('project_notifications',run_project_notifications),
+                            ('marketing_expense_notifications',run_expense_notifications),
+                            ('notification_comparison',run_notification_comparison),
+                            ('report_validation',run_report_validation),('notification_digest',run_notification_digest)]:
+            summary['modules'][name]=run_stage(ROOT,name,runner,args,summary)
+        summary['notification_delivery'] = run_stage(ROOT,'notification_health',run_notification_health,args.shadow)
         summary['process_exit_code'] = pipeline_exit_code(summary)
         summary['operational_status'] = {0:'ok', 1:'failed', 2:'requires_review'}[summary['process_exit_code']]
         summary['source_pipeline_finished_at'] = summary.get('finished_at')
@@ -662,9 +663,12 @@ def run_pipeline(args, tencent_runner, weread_runner, fanqie_runner, project_ini
             summary['modules'][name]={'status':'blocked','reason':'Shared project identity mutation has unknown outcome; reconcile before dependent writes'}
             continue
         try:
-            summary['modules'][name]=runner(args)
+            from scripts.stage_checkpoint import run_stage,StagePersistenceError
+            summary['modules'][name]=run_stage(ROOT,name,runner,args)
             if name=='tencent' and summary['modules'][name].get('source_changes'):
                 summary['modules'][name]['status']='source_review_required'
+        except StagePersistenceError:
+            raise
         except Exception as exc:
             summary['modules'][name]={'status':'failed','error':str(exc),'failed_at':now().isoformat()}
             if name=='tencent':

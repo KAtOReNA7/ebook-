@@ -122,6 +122,8 @@ class Base:
             from runner_policy import READ_COMMANDS, enforce_writer
         if command not in READ_COMMANDS:
             enforce_writer(ROOT)
+            from scripts.stage_checkpoint import before_mutation
+            before_mutation(ROOT, table)
         if payload is not None and isinstance(payload,dict) and command in ('+record-batch-create','+record-batch-update'):
             payload=dict(payload)
             if 'create_records' in payload:
