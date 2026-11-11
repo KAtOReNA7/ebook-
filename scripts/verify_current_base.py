@@ -2,8 +2,11 @@
 from collections import Counter
 from datetime import datetime
 from decimal import Decimal
-import json
-from feishu_io import Base,ROOT,save
+import argparse,json,sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from scripts.feishu_io import Base,ROOT,save
+from scripts.operational_validation import TZ,data_contract,workflow_issues
 
 
 def money(value):
@@ -11,7 +14,10 @@ def money(value):
 
 
 def main():
-    day=datetime.now().strftime('%Y-%m-%d')
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--date',default=datetime.now(TZ).date().isoformat())
+    day=parser.parse_args().date
+    datetime.strptime(day,'%Y-%m-%d')
     api=Base(ROOT/'receipts'/day/('current-verification-'+datetime.now().strftime('%H%M%S')))
     projects=api.read('项目总表')
     services=api.read('营销服务明细')
@@ -48,6 +54,11 @@ def main():
         if sorted(positions)!=list(range(1,expected+1)):
             raise ValueError('Incomplete rank sequence: '+name)
     marketing=[p for p in projects if p.get('监测范围')==['营销项目']]
+    contract=data_contract(ROOT,day,projects,daily,ranks,services)
+    runtime=json.loads((ROOT/'config/runtime.json').read_text(encoding='utf-8-sig'))
+    all_events=api.read('通知事件')
+    workflow=api.call('+workflow-get',workflow_id=runtime['native_workflow'])['data']
+    workflow_errors=workflow_issues(workflow,runtime,all_events,api._fields('通知事件'))
     result={'verified_at':datetime.now().astimezone().isoformat(),'base_url':api.manifest['base']['url'],
             'projects':len(projects),'marketing_project_groups':len(marketing),'services':len(services),
             'daily_records':len(daily),'daily_by_platform':dict(Counter(r['平台'][0] for r in daily)),
@@ -59,7 +70,8 @@ def main():
             'acceptance_test_events':sum(r.get('事件类型')=='验收测试' for r in events),
             'acceptance_test_events_sent':sum(r.get('事件类型')=='验收测试' and r.get('通知状态')==['已发送'] for r in events),
             'all_keys_unique':True,'service_links_valid':True,
-            'fee_reconciliation':'passed','readback':'passed'}
+            'fee_reconciliation':'passed','readback':'passed','date':day,'source_contract':contract,
+            'native_workflow_verification':{'status':'failed' if workflow_errors else 'passed','issues':workflow_errors}}
     save(ROOT/'runs'/day/'acceptance-summary.json',result)
     save(api.receipt_dir/'summary.json',result)
     print(json.dumps(result,ensure_ascii=False,indent=2))

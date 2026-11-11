@@ -25,7 +25,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 TABLE = '系统运行状态'
-SCHEMA = 'ebook-shared-checkpoint.v6'
+SCHEMA = 'ebook-shared-checkpoint.v7'
 BRANCH = 'codex/runtime-coordination'
 LEASE_ENV = 'EBOOK_SHARED_LEASE'
 FIELDS = [{'name': name, 'type': 'text'} for name in ('状态键', '内容', '校验值')]
@@ -244,7 +244,7 @@ class Store:
         if digest(raw) != meta['sha256']:
             raise RuntimeError('Incomplete or corrupt shared checkpoint')
         data = json.loads(raw)
-        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5',SCHEMA}:
+        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6',SCHEMA}:
             raise RuntimeError('Unknown shared checkpoint schema')
         return data, meta
 
@@ -344,6 +344,12 @@ def capture(root, day):
     for path in (root/'runs').glob('*/notification-comparison.json'):
         paths.add(path)
         if load(path).get('status') != 'completed': pinned.add(path.parent.name)
+    # An already-compared day can still have unpublished events. Keep its
+    # source pair until explicitly resolved, without replaying those messages.
+    for path in (root/'runs').glob('*/notification-digest-queue.json'):
+        state=path.with_name('notification-digest.apply-state.json')
+        consumed=set(load(state).get('consumed_ids',[])) if state.exists() else set()
+        if set(load(path).get('events',{}))-consumed:pinned.add(path.parent.name)
     for value in pinned:
         parsed = datetime.fromisoformat(value)
         days.update({value,(parsed-timedelta(days=1)).date().isoformat()})
@@ -385,7 +391,7 @@ def capture(root, day):
             'day': day, 'files': files, 'unresolved_guards': unresolved}
 
 
-def restore(root, checkpoint):
+def restore(root, checkpoint, day=None):
     """Restore only committed portable files; back up local values, never credentials."""
     root = Path(root)
     from scripts.daily_run import atomic_json
@@ -395,6 +401,35 @@ def restore(root, checkpoint):
         raw = value['text'].encode('utf-8')
         if digest(raw) != value['sha256']:
             raise ValueError('Checkpoint file checksum mismatch: ' + name)
+    # Completed local caches not in authority are not proof of shared work.
+    # Preserve them as audit backups rather than letting collectors reuse them.
+    days=set()
+    for value in (checkpoint.get('day'),day):
+        if value:
+            stamp=datetime.fromisoformat(value)
+            days.update((stamp-timedelta(days=n)).date().isoformat() for n in (0,1))
+    candidates={root/'runs'/name for name in ROOT_STATES}
+    # Old unshared queues must not pin/reintroduce abandoned machine-local
+    # history during capture. Keep the raw historical audit files in place.
+    for name in ('notification-digest-queue.json','notification-digest.apply-state.json','notification-comparison.json'):
+        candidates.update((root/'runs').glob('*/'+name))
+    for value in days:
+        directory=root/'runs'/value
+        candidates.update(directory/name for name in DAY_STATES)
+        candidates.add(directory/'weread.collecting.json')
+        candidates.add(directory/'fanqie/snapshot.json')
+        for folder in ('tencent-source','fanqie-rising'):
+            candidates.update((directory/folder).glob('*.json'))
+            candidates.update((directory/folder).glob('*.jsonp'))
+        for folder in directory.glob('publisher-recent-*'):candidates.update(folder.rglob('*.json'))
+    for path in candidates:
+        name=path.relative_to(root).as_posix()
+        if path.is_file() and name not in checkpoint['files']:
+            safe_path(root,name)
+            target=(backup/'uncommitted'/name).resolve()
+            if not target.is_relative_to(root.resolve()):raise ValueError('Cache backup escapes workspace')
+            target.parent.mkdir(parents=True,exist_ok=True)
+            path.replace(target)
     for path, name, value in validated:
         raw = value['text'].encode('utf-8')
         if path.exists() and path.read_bytes() == raw: continue
@@ -449,7 +484,7 @@ def session(root, dry_run=False):
         checkpoint, meta = store.read()
         if checkpoint.get('unresolved_guards'):
             raise RuntimeError('Shared checkpoint has unresolved mutations; reconcile from server evidence')
-        restore(root, checkpoint)
+        restore(root, checkpoint, shanghai_day())
         entered = True
         result = {'generation': meta['generation'], 'restored_files': len(checkpoint['files'])}
         yield result

@@ -50,6 +50,8 @@ def readback_issues(result):
         issues.append('Base: full readback, unique keys or links unverified')
     if result.get('fee_reconciliation')!='passed': issues.append('Base: expense reconciliation unverified')
     if result.get('complete_board_counts')!=BOARDS: issues.append('Base: five complete boards not verified')
+    if result.get('source_contract',{}).get('status')!='passed':issues.append('Base: per-record source comparison unverified')
+    if result.get('native_workflow_verification',{}).get('status')!='passed':issues.append('Native workflow or prior delivery unverified')
     return issues
 
 

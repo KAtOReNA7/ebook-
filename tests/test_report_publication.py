@@ -8,6 +8,7 @@ from unittest.mock import Mock,patch
 from scripts.daily_reports import flush,event_row
 from scripts.report_publication import source_issues,readback_issues,evidence_issues,BOARDS
 from scripts.initialize_manual_projects import unknown_guard_paths
+from tests.test_operational_validation import workflow_fixture
 
 
 def ready_pipeline(day='2026-11-11'):
@@ -31,14 +32,15 @@ def complete_evidence():
 
 
 class ReportPublicationTests(unittest.TestCase):
-    def run_flush(self,pipeline,evidence=None,records=None,hold=False,guard=False):
+    def run_flush(self,pipeline,evidence=None,records=None,hold=False,guard=False,workflow=None):
         with TemporaryDirectory() as d:
             root=Path(d);(root/'config').mkdir()
-            (root/'config/runtime.json').write_text(json.dumps({'report_publication_hold':{'active':hold}}))
+            (root/'config/runtime.json').write_text(json.dumps({'report_publication_hold':{'active':hold},'native_workflow':'flow','recipient_open_ids':['owner']}))
             if guard:
                 p=root/'runs'/pipeline['date'];p.mkdir(parents=True)
                 (p/'daily-state.json').write_text('{"phase":"requires_review"}')
-            api=Mock();api.read.side_effect=[records or [],[]];writer=Mock()
+            api=Mock();api.read.side_effect=[records or [],[],[]];api.call.return_value={'data':workflow if workflow is not None else workflow_fixture()};writer=Mock()
+            api._fields.return_value={'通知标题':{'id':'title_id'},'通知正文':{'id':'body_id'}}
             with patch('scripts.daily_run.shanghai_day',return_value=pipeline['date']), \
                  patch('scripts.notification_policy.notification_recipients',return_value=['owner']), \
                  patch('scripts.daily_reports.summary_body',return_value=('verified report',evidence if evidence is not None else complete_evidence())):
@@ -96,6 +98,11 @@ class ReportPublicationTests(unittest.TestCase):
     def test_current_unknown_source_guard_blocks(self):
         self.assertEqual(self.run_flush(ready_pipeline(),guard=True)[1],0)
 
+    def test_roster_change_after_full_readback_still_blocks_writer(self):
+        workflow=workflow_fixture();workflow['steps'][2]['data']['receiver'][0]['value']['id']='unauthorized'
+        result,calls=self.run_flush(ready_pipeline(),workflow=workflow)
+        self.assertEqual(calls,0);self.assertEqual(result['status'],'requires_review')
+
     def test_owner_hold_blocks_even_with_all_checks_complete(self):
         result,calls=self.run_flush(ready_pipeline(),hold=True)
         self.assertEqual(result['status'],'paused');self.assertEqual(calls,0)
@@ -110,7 +117,8 @@ class ReportPublicationTests(unittest.TestCase):
         self.assertEqual(result['messages_created'],0);self.assertEqual(calls,0)
 
     def test_full_base_readback_needs_every_board_and_reconciliation(self):
-        valid={'readback':'passed','all_keys_unique':True,'service_links_valid':True,'fee_reconciliation':'passed','complete_board_counts':BOARDS}
+        valid={'readback':'passed','all_keys_unique':True,'service_links_valid':True,'fee_reconciliation':'passed','complete_board_counts':BOARDS,
+               'source_contract':{'status':'passed'},'native_workflow_verification':{'status':'passed'}}
         self.assertEqual(readback_issues(valid),[])
         for key in valid:
             bad=copy.deepcopy(valid);bad.pop(key)
@@ -128,7 +136,7 @@ class ReportPublicationTests(unittest.TestCase):
         from datetime import datetime,timezone
         with TemporaryDirectory() as d:
             root=Path(d);p=root/'runs/2026-11-11';p.mkdir(parents=True)
-            evidence={'verified_at':'2026-11-11T10:00:00+08:00','readback':'passed','all_keys_unique':True,
+            evidence={'date':'2026-11-11','verified_at':'2026-11-11T10:00:00+08:00','readback':'passed','all_keys_unique':True,
                       'service_links_valid':True,'fee_reconciliation':'passed','complete_board_counts':BOARDS}
             (p/'acceptance-summary.json').write_text(json.dumps(evidence))
             with patch.object(daily_run,'ROOT',root),patch.object(daily_run,'call_script') as call, \

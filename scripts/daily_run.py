@@ -511,8 +511,9 @@ def run_report_validation(args, summary):
     if args.dry_run: return {'status':'dry_run','write_count':0}
     day=summary['date']; started=now().isoformat()
     try:
-        call_script('verify_current_base.py',[],ROOT/'runs'/day/'pre-publication-readback.log')
+        call_script('verify_current_base.py',['--date',day],ROOT/'runs'/day/'pre-publication-readback.log')
         result=json.loads((ROOT/'runs'/day/'acceptance-summary.json').read_text(encoding='utf-8'))
+        if result.get('date')!=day:raise ValueError('Base verification date differs from pipeline date')
         if datetime.fromisoformat(result['verified_at']) < datetime.fromisoformat(started):
             raise ValueError('Stale Base verification cannot approve publication')
         issues=readback_issues(result)

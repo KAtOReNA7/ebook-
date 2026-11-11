@@ -168,6 +168,12 @@ def flush(args,pipeline,runtime,root,api,writer):
     atomic_json(directory/'daily-reports-preview.json',rows)
     if publication_hold(root): return {'status':'paused','reason':'Owner publication hold; explicit resume required','write_count':0}
     if args.dry_run or not runtime['notifications_enabled']: return {'status':'dry_run','planned_messages':len(missing),'write_count':0}
+    if missing:
+        from scripts.operational_validation import workflow_issues
+        current_runtime=load(Path(root)/'config/runtime.json',{})
+        workflow=api.call('+workflow-get',workflow_id=current_runtime['native_workflow'])['data']
+        issues=workflow_issues(workflow,current_runtime,api.read('通知事件'),api._fields('通知事件'))
+        if issues:return {'status':'requires_review','reason':'Native delivery policy changed or unresolved','issues':issues,'write_count':0}
     guard=directory/'daily-reports.apply-state.json'
     if missing:
         atomic_json(guard,{'phase':'events_in_progress','keys':[r['事件唯一键'] for r in missing]})

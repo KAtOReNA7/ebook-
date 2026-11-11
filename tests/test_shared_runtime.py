@@ -39,21 +39,51 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_uncommitted_local_completed_cache_is_quarantined_not_reused(self):
+        with TemporaryDirectory() as d:
+            root=Path(d);directory=root/'runs/2026-11-11';directory.mkdir(parents=True)
+            marker=directory/'daily-state.json';marker.write_text('{"phase":"finished"}')
+            local=directory/'weread.json';local.write_text('{"books":[]}')
+            staging=directory/'weread.collecting.json';staging.write_text('{"books":[]}')
+            old=root/'runs/2026-10-01';old.mkdir();(old/'weread.json').write_text('{}')
+            (old/'notification-digest-queue.json').write_text('{"events":{"stale":{}}}')
+            checkpoint={'schema':'ebook-shared-checkpoint.v6','source_root':str(root),'day':'2026-11-10','files':{}}
+            restore(root,checkpoint,'2026-11-11')
+            self.assertFalse(marker.exists());self.assertFalse(local.exists())
+            self.assertFalse(staging.exists())
+            saved=list((root/'backups').glob('shared-cache-*/uncommitted/runs/2026-11-11/daily-state.json'))
+            self.assertEqual(json.loads(saved[0].read_text())['phase'],'finished')
+            self.assertTrue((old/'weread.json').exists())
+            self.assertFalse((old/'notification-digest-queue.json').exists())
+            self.assertNotIn('runs/2026-10-01/weread.json',capture(root,'2026-11-11')['files'])
+
+    def test_unpublished_compared_day_keeps_evidence_beyond_two_days(self):
+        with TemporaryDirectory() as d:
+            root=Path(d);day=root/'runs/2026-11-03';day.mkdir(parents=True)
+            (day/'notification-comparison.json').write_text('{"status":"completed"}')
+            (day/'notification-digest-queue.json').write_text('{"events":{"unpublished":{}}}')
+            (day/'notification-digest.apply-state.json').write_text('{"phase":"finished","consumed_ids":[]}')
+            (day/'weread.json').write_text('{"books":[]}')
+            previous=root/'runs/2026-11-02';previous.mkdir();(previous/'weread.json').write_text('{}')
+            snapshot=capture(root,'2026-11-11')
+            self.assertIn('runs/2026-11-03/weread.json',snapshot['files'])
+            self.assertIn('runs/2026-11-02/weread.json',snapshot['files'])
+
     def test_new_checkpoint_version_and_backward_read(self):
         with TemporaryDirectory() as directory:
             value = capture(Path(directory), '2026-11-09')
-            self.assertEqual(value['schema'], 'ebook-shared-checkpoint.v6')
+            self.assertEqual(value['schema'], 'ebook-shared-checkpoint.v7')
             store = Store(MemoryBase())
-            for schema in ('ebook-shared-checkpoint.v1', 'ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6'):
+            for schema in ('ebook-shared-checkpoint.v1', 'ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7'):
                 store.publish({**value, 'schema': schema})
                 self.assertEqual(store.read()[0]['schema'], schema)
             with self.assertRaisesRegex(RuntimeError, 'schema'):
-                store.publish({**value, 'schema': 'ebook-shared-checkpoint.v7'})
+                store.publish({**value, 'schema': 'ebook-shared-checkpoint.v8'})
 
     def test_pre_publication_gate_client_rejects_new_checkpoint(self):
         store=Store(MemoryBase())
-        store.publish({'schema':'ebook-shared-checkpoint.v6','files':{}})
-        with patch('scripts.shared_runtime.SCHEMA','ebook-shared-checkpoint.v5'):
+        store.publish({'schema':'ebook-shared-checkpoint.v7','files':{}})
+        with patch('scripts.shared_runtime.SCHEMA','ebook-shared-checkpoint.v6'):
             with self.assertRaisesRegex(RuntimeError,'schema'):store.read()
 
     def test_provider_policy_portable_but_session_stays_on_target(self):
