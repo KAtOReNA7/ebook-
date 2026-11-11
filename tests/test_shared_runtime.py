@@ -39,6 +39,22 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_failed_ownership_read_retains_exact_acquisition_for_reconciliation(self):
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/'acquire.json';git=FakeGit()
+            mutex=Mutex('test/repo',git,receipt_path=path)
+            with patch.object(mutex,'assert_owned',side_effect=PermissionError('stale ownership response')):
+                with self.assertRaises(PermissionError):mutex.acquire()
+            receipt=json.loads(path.read_text(encoding='utf-8'))
+            actual=json.loads(git.commits[git.current]['message'])
+            self.assertEqual(receipt['phase'],'requires_review')
+            self.assertEqual(receipt['token'],actual['token'])
+            self.assertEqual(receipt['parent_sha'],'root')
+            self.assertEqual(receipt['acquired_sha'],git.current)
+            self.assertEqual(actual['phase'],'busy')
+            mutex.assert_owned();mutex.release()
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['phase'],'finished')
+
     def test_uncommitted_local_completed_cache_is_quarantined_not_reused(self):
         with TemporaryDirectory() as d:
             root=Path(d);directory=root/'runs/2026-11-11';directory.mkdir(parents=True)

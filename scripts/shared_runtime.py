@@ -116,10 +116,13 @@ def gh(repo, endpoint, payload=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}) if direct
                                         else urllib.request.ProxyHandler(), NoRedirect())
     method = 'GET' if payload is None else 'PATCH' if endpoint.startswith('refs/heads/') else 'POST'
-    request = urllib.request.Request('https://api.github.com/repos/'+repo+'/git/'+endpoint,
+    # Mutable refs must not reuse an intermediary's earlier ownership response.
+    suffix = '?_ebook_read=' + uuid.uuid4().hex if payload is None else ''
+    request = urllib.request.Request('https://api.github.com/repos/'+repo+'/git/'+endpoint+suffix,
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={'Authorization':'Bearer '+_github_token,'Accept':'application/vnd.github+json',
-                 'Content-Type':'application/json','User-Agent':'ebook-shared-runner/1'},method=method)
+                 'Content-Type':'application/json','Cache-Control':'no-cache',
+                 'User-Agent':'ebook-shared-runner/1'},method=method)
     for attempt in range(3 if payload is None else 1):
         try:
             with opener.open(request,timeout=25) as response:
@@ -134,8 +137,16 @@ class BusyError(RuntimeError):
 
 
 class Mutex:
-    def __init__(self, repo, call=gh):
+    def __init__(self, repo, call=gh, receipt_path=None):
         self.repo, self.call, self.token = repo, call, None
+        self.receipt_path = Path(receipt_path) if receipt_path else None
+        self.acquisition = None
+
+    def record_acquisition(self, **updates):
+        self.acquisition = {**(self.acquisition or {}), **updates}
+        if self.receipt_path:
+            from scripts.daily_run import atomic_json
+            atomic_json(self.receipt_path, self.acquisition)
 
     def head(self):
         ref = self.call(self.repo, 'ref/heads/' + BRANCH)
@@ -175,15 +186,25 @@ class Mutex:
                 raise RuntimeError('Shared execution lock is older than two hours; inspect receipts, never auto-steal')
             raise BusyError('Another run owns the shared lock; do not start a second writer')
         token = uuid.uuid4().hex
+        # Retain the exact token before network mutation so a failed ownership
+        # read can be reconciled without guessing which process acquired it.
+        self.record_acquisition(phase='acquiring',parent_sha=sha,token=token,
+                                started_at=datetime.now(timezone.utc).isoformat())
         try:
-            self.transition(sha, commit, {'schema': 'ebook-mutex.v1', 'phase': 'busy', 'token': token})
+            acquired_sha=self.transition(sha, commit, {'schema': 'ebook-mutex.v1', 'phase': 'busy', 'token': token})
         except RuntimeError:
             _, _, current = self.head()
             if current.get('phase') == 'busy' and current.get('token') != token:
                 raise BusyError('Another execution won the shared lock') from None
             raise
         self.token = token
-        self.assert_owned()
+        self.record_acquisition(phase='ownership_pending',acquired_sha=acquired_sha)
+        try:
+            self.assert_owned()
+        except Exception:
+            self.record_acquisition(phase='requires_review')
+            raise
+        self.record_acquisition(phase='owned')
         return token
 
     def assert_owned(self):
@@ -196,6 +217,7 @@ class Mutex:
         if state.get('phase') != 'busy' or state.get('token') != self.token:
             raise PermissionError('Cannot release another execution lock')
         self.transition(sha, commit, {'schema': 'ebook-mutex.v1', 'phase': 'idle'})
+        if self.acquisition is not None:self.record_acquisition(phase='finished')
         self.token = None
 
 
@@ -477,7 +499,8 @@ def session(root, dry_run=False, staged=False):
     if unknown_guard_paths(root):
         raise RuntimeError('Unresolved local mutation; reconcile before replacing caches')
     config = configuration(root)
-    mutex = Mutex(config['coordination_repository'])
+    mutex = Mutex(config['coordination_repository'], receipt_path=
+                  root/'receipts'/shanghai_day()/('mutex-acquire-'+uuid.uuid4().hex+'.json'))
     old_env = os.environ.get(LEASE_ENV)
     from scripts.stage_checkpoint import ENV as STAGE_ENV, StageStore, require_settled, start
     old_stage = os.environ.pop(STAGE_ENV, None)
