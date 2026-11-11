@@ -4,12 +4,17 @@ Read README.md and docs/DEVELOPMENT.md first. On an existing operational
 checkout, also read the private RUNBOOK.md and config/runtime.json.
 
 - The owner explicitly accepted production on 2026-11-10. Operational runners
-  restore the approved private recipient roster from the v5 shared checkpoint;
+  restore the approved private recipient roster from the v6 shared checkpoint;
   use config/runtime.json as authority, not names or cached IDs from old docs.
   Unaccepted/development deployments remain owner-only. Never expand the approved
   roster, replay historical outboxes, send direct IM, or send test messages.
   The two same-day production-launch reports are a one-time authorized resend;
   their completed guard must prevent repetition on another computer.
+- Publication is the final business step: all required sources, comparisons,
+  fresh independent Base readback and complete board copyright evidence must
+  pass before either daily report is created. A failed check blocks both
+  reports; tell the owner the cause first. Respect any shared publication hold.
+  v5 writers must update before using a v6 checkpoint; never downgrade it.
 - Formal data is ebook-only. Audio and unknown service media stay excluded;
   a corresponding ebook ID does not admit an audio expense.
 - Fanqie publication rising daily integration was authorized on 2026-11-06. Use
