@@ -81,6 +81,12 @@ python scripts/verify_current_base.py
 
 上表省略目录的文件均位于 `scripts/`。受控身份/归并脚本须先生成与核对计划；默认不运行修复、清理或历史迁移。未知写入与 `requires_review` guard 必须完整只读对账，不能删除 guard 后重试。
 
+番茄仅返回单层分类时，`work_category.py`可按私有`work-metadata-policy.json`中的
+`category_reference_file`使用已审核的同作品两级参考标签。需匹配官方ID、作者和已审核的
+单层原文，并校验参考证据哈希；`分类原文`始终保留番茄值，项目资料来源及每日指标原文
+明确记录参考平台和链接。番茄返回完整两级分类时优先原生分类。参考文件和原始证据须
+列入`tencent-runtime.json`的私有证据引用，以随v8共享检查点接续；其他电脑应更新代码。
+
 ## 验证
 
 ```powershell

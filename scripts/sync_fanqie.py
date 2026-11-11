@@ -6,6 +6,7 @@ from pathlib import Path
 from feishu_io import Base, ROOT, save
 from work_copyright import apply_work_copyright
 from presentation import short_copyright
+from work_category import load_references, category_fields, category_source_text
 
 
 def minute(value):
@@ -35,6 +36,7 @@ def main():
     daily=[]
     skipped=[]
     batch='fanqie:'+data['started_at']
+    category_references=load_references()
     for book in data['books']:
         bid=str(book['book_id'])
         project=by_id.get(bid)
@@ -48,18 +50,17 @@ def main():
         metric=book.get('cumulative_readers_metric',{})
         observed=book['detail_source']['observed_at']
         status='部分缺失' if book.get('missing_fields') else '成功'
+        categories,category_basis=category_fields(book,category_references)
         update={'作品唯一键':key,'作者':book.get('author'),'字数':book.get('word_count'),
                         '版权方原文':book.get('platform_copyright_provider',book.get('copyright_provider')),
                         '版权方':[short_copyright(book['copyright_provider'])] if book.get('copyright_provider') else [],
-                        '作品分类':book.get('category'),
+                        **categories,
                         '最新点评人数':book.get('reviewer_count'),'最新书评数量':book.get('book_review_count'),
                         '最新累计阅读人数':book.get('cumulative_readers'),'最新采集时间':minute(observed),
                         '采集状态':[status], '指标精度说明':metric.get('raw','')+'；精度见每日原文，约数以一个显示单位缓冲判定。'}
-        if not book.get('category'):
-            update.pop('作品分类')  # Retain evidenced work-level fallback classification.
         if '基础资料来源' in api._fields('项目总表'):
             update['基础资料来源']=('作者、字数：番茄官方网页；分类：'
-                + ('番茄官方网页' if book.get('category') else '沿用已核实作品资料，番茄来源本次未返回分类'))
+                + category_source_text(category_basis))
         previous_observed=project.get('最新采集时间')
         if not previous_observed or minute(observed)>=minute(previous_observed):
             updates.append(update)
@@ -70,7 +71,7 @@ def main():
             '累计阅读人数':book.get('cumulative_readers'),'字数':book.get('word_count'),
             '版权方原文':book.get('platform_copyright_provider',book.get('copyright_provider')),
             '版权方':[short_copyright(book['copyright_provider'])] if book.get('copyright_provider') else [],
-            '作品分类':book.get('category'),
+            **categories,
             '采集状态':[status], '精度':[{'exact':'精确','approximate':'区间或约数'}.get(metric.get('precision'),'不可得')],
             '采集批次':batch,'数据来源':book.get('detail_url'),'原始证据定位':book['detail_source']['archive_path'],
             '缺失字段与原因':'；'.join({'copyright_provider':'版权方：当前采集来源未返回，尚待核实',
@@ -80,6 +81,7 @@ def main():
                 for k in book.get('missing_fields',[])) or None,
             '指标原文':json.dumps({'cumulative_readers_metric':metric,'reviewer_count':book.get('reviewer_count'),
                                  'copyright_basis':book.get('copyright_basis'),
+                                 'category_basis':category_basis,
                                  'platform_copyright_provider':book.get('platform_copyright_provider',book.get('copyright_provider')),
                                  'book_review_count':book.get('book_review_count'),'mapping':data['field_mapping']},ensure_ascii=False),
         })
