@@ -128,13 +128,14 @@ class DailyReportTests(unittest.TestCase):
 
     def test_second_computer_does_not_send_existing_reports(self):
         from scripts.daily_reports import flush
+        from tests.test_report_publication import ready_pipeline, complete_evidence
         day='2026-11-09'
         records=[event_row(day,k,'saved',{'member_event_ids':[]},['owner']) for k in ['ebook','weread']]
         with TemporaryDirectory() as d, patch('scripts.daily_run.shanghai_day',return_value=day), \
              patch('scripts.daily_reports.complete_weread',return_value={}), \
-             patch('scripts.daily_reports.copyright_summary',return_value=('body',[])):
+             patch('scripts.daily_reports.summary_body',return_value=('body',complete_evidence())):
             api=Mock(); api.read.side_effect=[records,[]]; writer=Mock()
-            result=flush(SimpleNamespace(dry_run=False),{'date':day,'modules':{}},
+            result=flush(SimpleNamespace(dry_run=False),ready_pipeline(day),
                          {'notifications_enabled':True},Path(d),api,writer)
             self.assertEqual(result['messages_created'],0)
             writer.assert_not_called()

@@ -78,6 +78,15 @@ def unknown_guard_paths(root):
                         '**/fanqie-rising-state.json'):
             candidates.update(directory.glob(pattern))
     unknown = []
+    # These source guards use reconciled as an explicit audited resume state.
+    # They were previously omitted by the shared report gate.
+    for name in ('daily-state.json','tencent-state.json','fanqie-state.json'):
+        for path in (root/'runs').glob('*/'+name):
+            try:
+                state=json.loads(path.read_text(encoding='utf-8-sig'))
+                if state.get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
+                    unknown.append(str(path))
+            except (ValueError,OSError):unknown.append(str(path))
     for path in sorted(candidates):
         if not path.exists():
             continue

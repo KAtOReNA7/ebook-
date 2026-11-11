@@ -54,6 +54,9 @@ def enforce_recipients(row, root=None):
     if not OWNER_CONFIGURED:
         raise ValueError('Missing verified owner in config/local-system.json; notification transport is disabled.')
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    from scripts.report_publication import publication_hold
+    if publication_hold(root):
+        raise ValueError('Owner paused report publication; explicit resume required before sending')
     allowed = notification_recipients(root)
     recipients = row.get('收件人') or []
     ids = [person.get('id') if isinstance(person, dict) else None for person in recipients]

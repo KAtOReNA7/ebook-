@@ -223,10 +223,13 @@ def event_candidates(previous, current, projects):
     pending, events = [], []
 
     def board(snapshot, chart):
+        from scripts.weread_copyright import apply_confirmed_copyright
+        from scripts.presentation import short_copyright
+        books={str(b['book_id']):b for b in snapshot.get('books',[])}
         entries = []
         for row in chart['records']:
-            project = project_index.get('weread:' + str(row['book_id']), {})
-            verified = '是' in options(project.get('磨铁版权确认'))
+            book=books.get(str(row['book_id']))
+            verified=bool(book and short_copyright(apply_confirmed_copyright(book,ROOT).get('copyright_provider'))=='磨铁')
             entries.append({'book_id': str(row['book_id']), 'rank': row['rank'],
                             'copyright_verified': verified, 'copyright_group': '磨铁' if verified else None})
         return {'platform': 'weread', 'board_id': BOARD_IDS[chart['chart_id']],
@@ -469,6 +472,7 @@ def main():
         summary['modules']['project_notifications'] = run_project_notifications(args, summary)
         summary['modules']['marketing_expense_notifications'] = run_expense_notifications(args, summary)
         summary['modules']['notification_comparison'] = run_notification_comparison(args, summary)
+        summary['modules']['report_validation'] = run_report_validation(args, summary)
         summary['modules']['notification_digest'] = run_notification_digest(args, summary)
         summary['notification_delivery'] = run_notification_health(args.shadow)
         summary['process_exit_code'] = pipeline_exit_code(summary)
@@ -497,6 +501,25 @@ def run_notification_comparison(args, summary):
         return resume_today(args, summary, notification_runtime(args.shadow), ROOT, api)
     except Exception as exc:
         return {'status':'requires_review','reason':str(exc)}
+
+
+def run_report_validation(args, summary):
+    """Read back business data after every source/comparison, before publication."""
+    from scripts.report_publication import source_issues, readback_issues
+    issues=source_issues(summary)
+    if issues: return {'status':'requires_review','issues':issues,'write_count':0}
+    if args.dry_run: return {'status':'dry_run','write_count':0}
+    day=summary['date']; started=now().isoformat()
+    try:
+        call_script('verify_current_base.py',[],ROOT/'runs'/day/'pre-publication-readback.log')
+        result=json.loads((ROOT/'runs'/day/'acceptance-summary.json').read_text(encoding='utf-8'))
+        if datetime.fromisoformat(result['verified_at']) < datetime.fromisoformat(started):
+            raise ValueError('Stale Base verification cannot approve publication')
+        issues=readback_issues(result)
+        return {'status':'requires_review' if issues else 'completed','date':day,
+                'issues':issues,'verified_at':result['verified_at'],'write_count':0}
+    except Exception as exc:
+        return {'status':'requires_review','date':day,'reason':str(exc),'write_count':0}
 
 
 def run_notification_digest(args, summary):

@@ -155,7 +155,7 @@ class NotificationHealthTests(unittest.TestCase):
         self.assertEqual(code, 1)
         summary = write.call_args.args[1]
         self.assertIn('notification_delivery', summary)
-        self.assertEqual(list(summary['modules']), ['weread', 'project_notifications', 'marketing_expense_notifications', 'notification_comparison', 'notification_digest'])
+        self.assertEqual(list(summary['modules']), ['weread', 'project_notifications', 'marketing_expense_notifications', 'notification_comparison', 'report_validation', 'notification_digest'])
 
 
 if __name__ == '__main__':

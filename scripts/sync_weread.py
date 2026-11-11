@@ -132,9 +132,9 @@ def sync(data, source, run_kind='local', api=None, recent_tracks=None):
                 project.pop('首次上榜采集日', None)
                 project['追踪截止日'] = track['end_date'] + ' 00:00'
                 project['证据与备注'] = '完整最近上架列表基线之后首次出现的电子书ID；追踪30天，连载更新与重入不重置。累计阅读人数口径尚未核实。'
-        if book.get('copyright_basis') or book.get('copyright_provider') in aliases:
+        if book.get('copyright_provider') in aliases:
             project['磨铁版权确认'] = ['是']
-        elif old.get('版权方原文') in aliases and book.get('copyright_provider') not in aliases:
+        elif book.get('copyright_provider') and book.get('copyright_provider') not in aliases:
             project['磨铁版权确认'] = ['待核实']
         # Clear an unavailable latest metric instead of showing yesterday as today.
         # New records simply omit unavailable cells; updates explicitly clear them.

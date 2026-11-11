@@ -77,7 +77,8 @@ class DailyTests(unittest.TestCase):
         api = FakeBase()
         # This test exercises replay against a fake transport, independently
         # of the developer machine's real owner identity/configuration.
-        with patch('scripts.notification_policy.OWNER_CONFIGURED', True):
+        with TemporaryDirectory() as d, patch.object(daily_run,'ROOT',Path(d)), \
+             patch('scripts.notification_policy.OWNER_CONFIGURED', True):
             self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 1)
             self.assertEqual(create_event_rows(api, [row], '2026-11-03'), 0)
         self.assertEqual(api.calls, 1)
@@ -119,6 +120,17 @@ class DailyTests(unittest.TestCase):
                                            snapshot('2026-11-04', range(1, 51)), [project])
         self.assertEqual(events, [])
         self.assertEqual(pending, [])
+
+    def test_stale_motie_checkbox_cannot_override_verified_platform_copyright(self):
+        def snap(day,ids,provider):
+            return {'collection_date':day,'books':[{'book_id':'1','title':'sample','author':'author','copyright_provider':provider}],
+                    'charts':[{'chart_id':'rising','complete_top50':True,'errors':[],
+                               'records':[{'book_id':str(n),'rank':i+1} for i,n in enumerate(ids)]}]}
+        project={'作品唯一键':'weread:1','平台':['微信读书'],'监测范围':['仅榜单样本'],'磨铁版权确认':['是']}
+        events,_=event_candidates(snap('2026-11-10',range(1,51),'中文在线'),snap('2026-11-11',range(2,52),'中文在线'),[project])
+        self.assertEqual(events,[])
+        events,_=event_candidates(snap('2026-11-10',range(1,51),'磨铁数盟'),snap('2026-11-11',range(2,52),'磨铁数盟'),[project])
+        self.assertEqual(len(events),1)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 from copy import deepcopy
 import unittest
+from unittest.mock import patch
 
 from scripts.manual_project_notifications import build_plan, covered_by_tencent, notification_rows
 from scripts.notification_policy import OWNER_ID
@@ -42,7 +43,8 @@ class NewProjectNotificationTests(unittest.TestCase):
         plan = build_plan(projects, previous, '2026-11-04', covered)
         self.assertEqual([e['record_id'] for e in plan['events']], ['manual'])
         self.assertEqual(len(plan['exclusions']), 4)
-        rows = notification_rows(plan, 'test')
+        with patch('scripts.manual_project_notifications.notification_recipients',return_value=[OWNER_ID]):
+            rows = notification_rows(plan, 'test')
         self.assertEqual(rows[0]['关联项目'], [{'id': 'manual'}])
         self.assertEqual(rows[0]['规则ID'], 'v1:project_table.new_record')
         self.assertEqual(rows[0]['收件人'], [{'id': OWNER_ID}])

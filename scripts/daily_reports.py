@@ -137,10 +137,18 @@ def flush(args,pipeline,runtime,root,api,writer):
     from scripts.notification_digest import consumed_ids, load
     from scripts.initialize_manual_projects import unknown_guard_paths
     from scripts.notification_policy import notification_recipients
+    from scripts.report_publication import source_issues, evidence_issues, publication_hold
     recipients = notification_recipients(root)
     day=pipeline['date']; directory=Path(root)/'runs'/day
     if day!=shanghai_day(): raise ValueError('Historical report requires explicit recovery entry')
     if unknown_guard_paths(Path(root)): return {'status':'requires_review','reason':'Unknown mutation; reconcile first','write_count':0}
+    issues=source_issues(pipeline)
+    validation=pipeline.get('modules',{}).get('report_validation',{})
+    if validation.get('status')!='completed' or validation.get('date')!=day:
+        issues.append('Final independent Base verification not completed for this date')
+    if issues:
+        atomic_json(directory/'report-publication-blocked.json',{'date':day,'issues':issues,'messages_created':0})
+        return {'status':'requires_review','reason':'Report publication blocked until all checks pass','issues':issues,'write_count':0}
     records=api.read('通知事件',[['发生日期','==',f'ExactDate({day})']]); consumed=consumed_ids(records)
     queue=load(directory/'notification-digest-queue.json',{'events':{}})
     pending=[r for k,r in queue['events'].items() if k not in consumed]
@@ -149,11 +157,16 @@ def flush(args,pipeline,runtime,root,api,writer):
         atomic_json(directory/'daily-report-context.json',pipeline)
     rows=[event_row(day,'ebook',ebook_body(pipeline,pending,daily_rows),{'member_event_ids':[r['事件唯一键'] for r in pending]},recipients)]
     body,evidence=summary_body(root,day)
+    issues=evidence_issues(evidence)
+    if issues:
+        atomic_json(directory/'report-publication-blocked.json',{'date':day,'issues':issues,'messages_created':0})
+        return {'status':'requires_review','reason':'Report source evidence incomplete','issues':issues,'write_count':0}
     rows.append(event_row(day,'weread',body,evidence,recipients))
     existing={r['事件唯一键'] for r in records}; missing=[r for r in rows if r['事件唯一键'] not in existing]
     if rows[0]['事件唯一键'] in existing and pending:
         return {'status':'requires_review','reason':'Daily report already sent; additional events retained, no duplicate report','write_count':0}
     atomic_json(directory/'daily-reports-preview.json',rows)
+    if publication_hold(root): return {'status':'paused','reason':'Owner publication hold; explicit resume required','write_count':0}
     if args.dry_run or not runtime['notifications_enabled']: return {'status':'dry_run','planned_messages':len(missing),'write_count':0}
     guard=directory/'daily-reports.apply-state.json'
     if missing:

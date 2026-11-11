@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from scripts.marketing_notice_text import service_sentence, service_content
 from scripts.marketing_expense_notifications import build_plan, notification_rows, run, validate_current_source
@@ -68,7 +69,8 @@ class ExpenseTests(unittest.TestCase):
         previous = [{'服务明细唯一键': 'old', '原始行唯一键': 'tencent:' + DOC_KEY + ':old'}]
         events, baseline = new_entry_candidates(plan, previous, PROJECTS)
         self.assertFalse(baseline)
-        rows = event_rows(events, PROJECTS, 'test')
+        with patch('scripts.tencent_daily.notification_recipients',return_value=[OWNER_ID]):
+            rows = event_rows(events, PROJECTS, 'test')
         self.assertTrue(rows[0]['通知正文'].startswith('《某书》于2026年10月27日，约评30条，花费180元。'))
         self.assertEqual(rows[0]['事件唯一键'], sha(['marketing.new_service', 'v1', s['服务明细唯一键']]))
         self.assertEqual(rows[0]['收件人'], [{'id': OWNER_ID}])
