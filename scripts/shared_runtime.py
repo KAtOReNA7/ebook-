@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -123,7 +124,7 @@ def gh(repo, endpoint, payload=None):
         try:
             with opener.open(request,timeout=25) as response:
                 return json.load(response)
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
             failure = type(error).__name__ + ':' + str(getattr(error,'code','transport'))
     raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + failure)
 
