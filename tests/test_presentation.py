@@ -18,6 +18,23 @@ def schema(table):
 
 
 class PresentationTests(unittest.TestCase):
+    def test_reviewed_category_survives_remote_round_trip(self):
+        for table in ['项目总表', '每日数据']:
+            with self.subTest(table=table):
+                physical={'作品唯一键':'fanqie:123','分类原文':'精品小说',
+                          '一级分类':['精品小说'],'二级分类':['女性小说']}
+                logical=p.from_remote(table,physical,schema(table))
+                self.assertEqual(p.to_remote(table,logical,schema(table)),physical)
+
+    def test_changed_native_category_replaces_old_display_pair(self):
+        physical={'作品唯一键':'fanqie:123','分类原文':'精品小说',
+                  '一级分类':['精品小说'],'二级分类':['女性小说']}
+        logical=p.from_remote('项目总表',physical,schema('项目总表'))
+        logical['作品分类']='精品小说/科幻小说'
+        result=p.to_remote('项目总表',logical,schema('项目总表'))
+        self.assertEqual(result['分类原文'],'精品小说/科幻小说')
+        self.assertEqual(result['二级分类'],['科幻小说'])
+
     def test_unopened_rating_label_keeps_numeric_rating_empty(self):
         row={'日数据唯一键':'2026-11-04:weread:1','作品唯一键':'weread:1','平台':['微信读书'],
              '点评人数':0,'推荐值':None,'今日阅读人数':3,'采集状态':['未开分'],'缺失字段与原因':'推荐值：未开分'}

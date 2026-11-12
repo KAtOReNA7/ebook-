@@ -66,9 +66,16 @@ def to_remote(table,row,fields,context=None):
         out['版权方']=row['版权方'] if '版权方' in row else ([short_copyright(raw)] if short_copyright(raw) else [])
     if '作品分类' in out:
         raw=out.pop('作品分类'); out['分类原文']=raw
-        one,two=split_category(raw)
-        out['一级分类']=[one] if one else []
-        out['二级分类']=[two] if two else []
+        # from_remote adds the logical alias while retaining the physical
+        # display labels. Preserve that exact round trip, including reviewed
+        # work-level labels that are richer than a single native source tag.
+        # A changed logical source category must still derive fresh labels.
+        existing_pair=(raw==row.get('分类原文') and
+                       '一级分类' in row and '二级分类' in row)
+        if not existing_pair:
+            one,two=split_category(raw)
+            out['一级分类']=[one] if one else []
+            out['二级分类']=[two] if two else []
     if table=='项目总表':
         for old,new in METRICS.items():
             if old in out:
