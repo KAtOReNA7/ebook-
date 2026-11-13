@@ -341,6 +341,16 @@ def reviewed_tencent_files(root, directory):
     return set(source.parent.glob('*.json')) | set(source.parent.glob('*.jsonp'))
 
 
+def reviewed_fanqie_files(root, directory):
+    effective = Path(directory)/'fanqie-effective.json'
+    if not effective.exists(): return set()
+    paths = set()
+    for name in load(effective).get('reviewed_supplements', []):
+        source = safe_path(root, name)
+        paths.update(source.parent.glob('*.json'))
+    return paths
+
+
 def capture(root, day):
     root = Path(root)
     paths = {root/'config'/name for name in CONFIGS} | {root/'runs'/name for name in ROOT_STATES}
@@ -392,6 +402,7 @@ def capture(root, day):
         directory = root/'runs'/value
         paths.update(directory/name for name in DAY_STATES)
         paths.update(reviewed_tencent_files(root, directory))
+        paths.update(reviewed_fanqie_files(root, directory))
         for folder in ('tencent-source', 'fanqie-rising'):
             paths.update((directory/folder).glob('*.json'))
             paths.update((directory/folder).glob('*.jsonp'))
@@ -463,6 +474,7 @@ def restore(root, checkpoint, day=None):
         directory=root/'runs'/value
         candidates.update(directory/name for name in DAY_STATES)
         candidates.update(reviewed_tencent_files(root, directory))
+        candidates.update(reviewed_fanqie_files(root, directory))
         candidates.add(directory/'weread.collecting.json')
         candidates.add(directory/'fanqie/snapshot.json')
         for folder in ('tencent-source','fanqie-rising'):

@@ -136,6 +136,10 @@ def run(args):
     api=Base(ROOT/'receipts'/day/('fanqie-daily-'+now().strftime('%H%M%S-%f')))
     all_projects=api.read('项目总表')
     _,projects,pending=current_scope(all_projects)
+    if getattr(args, 'fanqie_supplement', None):
+        from scripts.fanqie_supplement import prepare
+        prepare(ROOT, directory, args.fanqie_supplement,
+                {str(p['平台作品ID']) for p in projects}, day)
     # Reviewed same-day supplements retain their real sampling time and do
     # not overwrite the initial frozen observation.
     source=directory/'fanqie-effective.json'

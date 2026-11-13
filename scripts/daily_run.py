@@ -441,6 +441,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Reads and local plans only; no Base mutation')
     parser.add_argument('--shadow', action='store_true', help='Force local event outbox only, even if runtime enables notifications')
     parser.add_argument('--tencent-source', help='Reviewed replacement frozen source directory; retain the original observation for audit')
+    parser.add_argument('--fanqie-supplement', help='Same-day frozen snapshot covering only failed Fanqie IDs; preserve original observations')
     args = parser.parse_args()
     try:
         from .shared_runtime import session

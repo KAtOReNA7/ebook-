@@ -95,6 +95,13 @@ python scripts/verify_current_base.py
 
 ## 验证
 
+番茄当天详情请求部分失败时，可单独用 `collect_fanqie.py` 只读补采失败 ID，
+再通过统一入口的 `--fanqie-supplement <snapshot.json>` 续跑。补采必须恰好覆盖
+当天已登记的失败 ID，官方 HTTPS 原始响应、哈希、身份和字段重新解析均须通过；
+原成功采样及其时刻保持不变，失败记录仍留档。有效合并与补采原文随私有共享
+检查点保存。先验证本地合并，未知写入仍须先对账；不得改写原始快照、伪造采样
+时间或绕过最终发布检查。已完成模块不因提供补采参数而重复同步。
+
 ```powershell
 python -m unittest discover -s tests -t .
 git diff --check
