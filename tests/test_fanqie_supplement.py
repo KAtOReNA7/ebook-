@@ -1,10 +1,12 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
-from scripts.fanqie_supplement import merge
+from scripts.fanqie_supplement import merge, prepare
 from scripts.shared_runtime import capture, restore
 
 
@@ -56,6 +58,31 @@ class FanqieSupplementTests(unittest.TestCase):
             restore(root,snapshot,'2026-11-13')
             self.assertFalse((extra/'uncommitted.json').exists())
             self.assertTrue((extra/'book.json').exists())
+
+    def test_prepare_rechecks_raw_evidence_and_existing_effective_snapshot(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp); day=root/'runs/2026-11-13'; (day/'fanqie').mkdir(parents=True)
+            extra_dir=root/'receipts/supplement'; extra_dir.mkdir(parents=True)
+            response=extra_dir/'response.json'; response.write_bytes(b'{}')
+            source={'url':'https://fanqienovel.com/api/book/info?book_id=2',
+                    'archive_path':str(response),'http_status':200,
+                    'observed_at':'2026-11-13T11:01:00+08:00',
+                    'response_sha256':hashlib.sha256(b'{}').hexdigest()}
+            extra=observation(['2']); extra['sources']=[source]
+            extra['books'][0].update(detail_source=source,identity_source=source)
+            (day/'fanqie/snapshot.json').write_text(json.dumps(observation(['1'],['2'])))
+            extra_path=extra_dir/'snapshot.json'; extra_path.write_text(json.dumps(extra))
+            with patch('scripts.collect_fanqie.normalize',return_value=extra['books'][0]):
+                target=prepare(root,day,extra_path,{'1','2'},'2026-11-13')
+                self.assertEqual(prepare(root,day,extra_path,{'1','2'},'2026-11-13'),target)
+                response.write_bytes(b'{"changed":true}')
+                with self.assertRaisesRegex(ValueError,'receipt failed'):
+                    prepare(root,day,extra_path,{'1','2'},'2026-11-13')
+                response.write_bytes(b'{}')
+                result=json.loads(target.read_text()); result['books'][0]['book_id']='9'
+                target.write_text(json.dumps(result))
+                with self.assertRaisesRegex(ValueError,'differs'):
+                    prepare(root,day,extra_path,{'1','2'},'2026-11-13')
 
 
 if __name__=='__main__':unittest.main()
