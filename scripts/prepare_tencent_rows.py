@@ -39,6 +39,29 @@ def normalized_platform(raw):
     return None
 
 
+def source_layout(headers):
+    """Resolve required business columns by unique headers, never by position.
+
+    The raw grid/fingerprint stays positional: moving columns is still a
+    reviewed source change, not permission to reuse an old approval.
+    """
+    expected = {
+        0: '发生日期', 1: '服务平台', 2: 'id', 3: '书名', 4: '事务',
+        5: '单价（元/人）', 6: '人数（人）', 7: '服务费（元）',
+        8: '服务内容留档', 9: '报销批次',
+        10: '备注：该服务费金额是抵扣代缴个税后金额',
+        12: '付款月份', 13: '结算时间',
+    }
+    layout = {}
+    for logical, label in expected.items():
+        matches = [col for col, value in headers.items()
+                   if re.sub(r'\s+', '', str(value or '')) == label]
+        if len(matches) != 1:
+            raise ValueError(f'Missing or ambiguous source header: {label}')
+        layout[logical] = matches[0]
+    return layout
+
+
 def build(directory):
     manifest = load(directory / 'manifest.json')
     source_cells, coverage, conflicts, source_files = {}, defaultdict(set), [], defaultdict(list)
@@ -93,12 +116,16 @@ def build(directory):
                     independent_mismatches.append({'sheet_id': sid, 'a1': cell['a1']})
                 else:
                     verified_cells += 1
+    layouts = {sheet['sheet_id']: source_layout({
+        col: source_cells.get((sheet['sheet_id'], 0, col), {}).get('value')
+        for col in range(sheet['columns'])}) for sheet in manifest['sheets']}
     archive_merge_lookup = {}
     for merged in merge_index.values():
-        if merged['start_col'] != 8 or merged['end_col'] != 8:
+        archive_col = layouts[merged['sheet_id']][8]
+        if merged['start_col'] != archive_col or merged['end_col'] != archive_col:
             raise ValueError('A new merge outside the archive column requires explicit handling; no blind inheritance')
         for row in range(merged['start_row'], merged['end_row'] + 1):
-            key = (merged['sheet_id'], row, 8)
+            key = (merged['sheet_id'], row, archive_col)
             if key in archive_merge_lookup and archive_merge_lookup[key] != merged:
                 raise ValueError('Overlapping archive merge ranges')
             archive_merge_lookup[key] = merged
@@ -109,6 +136,8 @@ def build(directory):
         if coverage[sid] != expected:
             raise ValueError('Missing or excess rows in source coverage')
         headers = {col: source_cells.get((sid, 0, col), {}).get('value') for col in range(sheet['columns'])}
+        layout = layouts[sid]
+        archive_col = layout[8]
         grid_rows = []
         for row in range(sheet['rows']):
             cells, rich_cells = [], {}
@@ -125,6 +154,8 @@ def build(directory):
             grid_rows.append({'source_row': row + 1, 'values': cells})
             if row == 0 or not any(value is not None for value in cells):
                 continue
+            raw_cells = cells
+            cells = [raw_cells[layout[col]] if col in layout else None for col in range(14)]
             raw_platform = cells[1]
             platform = normalized_platform(raw_platform)
             all_business_rows.append({'source_sheet_id': sid, 'source_row': row + 1, 'platform_raw': raw_platform})
@@ -158,11 +189,11 @@ def build(directory):
             if not cells[3]:
                 ambiguities.append('书名为空。')
             links = []
-            archive_cell = rich_cells['I']
+            archive_cell = rich_cells[column_name(archive_col)]
             archive_inheritance = None
-            merged = archive_merge_lookup.get((sid, row, 8))
+            merged = archive_merge_lookup.get((sid, row, archive_col))
             if merged and row != merged['start_row']:
-                anchor = source_cells.get((sid, merged['start_row'], 8))
+                anchor = source_cells.get((sid, merged['start_row'], archive_col))
                 if anchor and not archive_cell['value'] and not archive_cell['links']:
                     archive_cell = anchor
                     archive_inheritance = {'anchor_a1': anchor['a1'], 'range': merged,
@@ -218,12 +249,12 @@ def build(directory):
                       'source_pages': sorted({file for col in range(sheet['columns']) for file in source_files[(sid, row, col)]}),
                       'cells': rich_cells, 'normalized': normalized, 'ambiguities': ambiguities,
                       'confirmation_status': '待核实' if (not equality or not date_value or bundle_candidate) else '结构与算式核验通过',
-                      'source_content_sha256': hashlib.sha256(json.dumps(cells, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()}
+                      'source_content_sha256': hashlib.sha256(json.dumps(raw_cells, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()}
             filtered.append(record)
             if ambiguities:
                 unresolved.append({'source_sheet_id': sid, 'source_row': row + 1, 'reasons': ambiguities})
         grid.append({'sheet_id': sid, 'sheet_name': sheet['name'], 'row_count': sheet['rows'],
-                     'column_count': sheet['columns'], 'headers': headers, 'rows': grid_rows,
+                     'column_count': sheet['columns'], 'headers': headers, 'business_column_map': layout, 'rows': grid_rows,
                      'source_cells': [cell for (ss, rr, cc), cell in source_cells.items() if ss == sid],
                      'blank_semantics': 'null retains source blank/omitted cells; no forward fill was performed',
                      'merge_ranges': [m for m in merge_index.values() if m['sheet_id'] == sid],

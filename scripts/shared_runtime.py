@@ -328,6 +328,19 @@ def safe_path(root, name):
     return path
 
 
+def reviewed_tencent_files(root, directory):
+    """Keep a reviewed replacement observation portable alongside the original."""
+    plan = Path(directory)/'tencent-daily-import-plan.json'
+    if not plan.exists() or not load(plan).get('source_file'):
+        return set()
+    from scripts.local_settings import project_path
+    source = project_path(load(plan)['source_file'], root).resolve()
+    safe_path(root, source.relative_to(Path(root).resolve()).as_posix())
+    if source.name != 'filtered-rows.json':
+        raise ValueError('Unexpected reviewed Tencent source filename')
+    return set(source.parent.glob('*.json')) | set(source.parent.glob('*.jsonp'))
+
+
 def capture(root, day):
     root = Path(root)
     paths = {root/'config'/name for name in CONFIGS} | {root/'runs'/name for name in ROOT_STATES}
@@ -378,6 +391,7 @@ def capture(root, day):
     for value in sorted(days):
         directory = root/'runs'/value
         paths.update(directory/name for name in DAY_STATES)
+        paths.update(reviewed_tencent_files(root, directory))
         for folder in ('tencent-source', 'fanqie-rising'):
             paths.update((directory/folder).glob('*.json'))
             paths.update((directory/folder).glob('*.jsonp'))
@@ -448,6 +462,7 @@ def restore(root, checkpoint, day=None):
     for value in days:
         directory=root/'runs'/value
         candidates.update(directory/name for name in DAY_STATES)
+        candidates.update(reviewed_tencent_files(root, directory))
         candidates.add(directory/'weread.collecting.json')
         candidates.add(directory/'fanqie/snapshot.json')
         for folder in ('tencent-source','fanqie-rising'):

@@ -39,6 +39,24 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_reviewed_tencent_replacement_keeps_both_frozen_sources(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory);day=root/'runs/2026-11-13'
+            original=day/'tencent-source';reviewed=day/'tencent-source-reviewed'
+            original.mkdir(parents=True);reviewed.mkdir()
+            (original/'raw.jsonp').write_text('original frozen response',encoding='utf-8')
+            (reviewed/'raw.jsonp').write_text('reviewed frozen response',encoding='utf-8')
+            (reviewed/'filtered-rows.json').write_text('{}',encoding='utf-8')
+            (day/'tencent-daily-import-plan.json').write_text(json.dumps({
+                'source_file':'runs/2026-11-13/tencent-source-reviewed/filtered-rows.json'}),encoding='utf-8')
+            snapshot=capture(root,'2026-11-13')
+            self.assertEqual(snapshot['files']['runs/2026-11-13/tencent-source/raw.jsonp']['text'],'original frozen response')
+            self.assertEqual(snapshot['files']['runs/2026-11-13/tencent-source-reviewed/raw.jsonp']['text'],'reviewed frozen response')
+            (reviewed/'uncommitted.json').write_text('{}',encoding='utf-8')
+            restore(root,snapshot,'2026-11-13')
+            self.assertFalse((reviewed/'uncommitted.json').exists())
+            self.assertEqual((reviewed/'raw.jsonp').read_text('utf-8'),'reviewed frozen response')
+
     def test_failed_ownership_read_retains_exact_acquisition_for_reconciliation(self):
         with TemporaryDirectory() as directory:
             path=Path(directory)/'acquire.json';git=FakeGit()

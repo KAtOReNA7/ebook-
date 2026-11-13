@@ -440,6 +440,7 @@ def main():
     parser.add_argument('--run-kind', choices=['scheduled', 'local'], default='local')
     parser.add_argument('--dry-run', action='store_true', help='Reads and local plans only; no Base mutation')
     parser.add_argument('--shadow', action='store_true', help='Force local event outbox only, even if runtime enables notifications')
+    parser.add_argument('--tencent-source', help='Reviewed replacement frozen source directory; retain the original observation for audit')
     args = parser.parse_args()
     try:
         from .shared_runtime import session
@@ -465,7 +466,7 @@ def main():
             from fanqie_daily import run as run_fanqie
             from fanqie_rising_daily import run as run_fanqie_rising
             from publisher_recent_daily import run as run_publisher_recent
-        args.source_dir = None
+        args.source_dir = args.tencent_source
         args.identity_map = []
         initialization = run_stage(ROOT,'project_initialization',run_project_initialization,args)
         summary = run_pipeline(args, run_tencent, run, run_fanqie, initialization, run_publisher_recent,
