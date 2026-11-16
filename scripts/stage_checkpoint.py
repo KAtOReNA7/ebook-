@@ -3,6 +3,7 @@ import base64
 import gzip
 import json
 import os
+import time
 from pathlib import Path
 import uuid
 
@@ -33,27 +34,41 @@ class StageStore:
     def rows(self):
         return self.api.read(TABLE, [['状态键', 'intersects', 'stage:']])
 
-    def read(self):
-        rows = self.rows()
-        index = {r['状态键']: r for r in rows}
-        if len(index) != len(rows): raise StagePersistenceError('Duplicate stage journal keys')
-        if HEAD not in index: return None, None
-        head = index[HEAD]
+    def head(self):
+        rows = self.api.read(TABLE, [['状态键','==',HEAD]])
+        if len(rows)>1: raise StagePersistenceError('Duplicate stage HEAD')
+        if not rows: return None
+        head = rows[0]
         if digest(head['内容'].encode()) != head['校验值']: raise StagePersistenceError('Stage HEAD checksum differs')
         meta = json.loads(head['内容'])
         if meta.get('schema') != SCHEMA or meta.get('slot') not in (0, 1):
             raise StagePersistenceError('Unknown stage journal schema')
+        return meta
+
+    def read(self):
+        meta = self.head()
+        if meta is None: return None, None
+        rows = self.api.read(TABLE, [['状态键','intersects',f"stage:slot{meta['slot']}:"]])
+        index = {r['状态键']: r for r in rows}
+        if len(index) != len(rows): raise StagePersistenceError('Duplicate stage journal keys')
+        for i in range(meta['chunks']):
+            row=index[f"stage:slot{meta['slot']}:{i:05}"]
+            if digest(row['内容'].encode())!=row['校验值']: raise StagePersistenceError('Stage chunk checksum differs')
         encoded = ''.join(index[f"stage:slot{meta['slot']}:{i:05}"]['内容'] for i in range(meta['chunks']))
         raw = gzip.decompress(base64.b64decode(encoded, validate=True))
         if digest(raw) != meta['sha256']: raise StagePersistenceError('Stage payload checksum differs')
         value = json.loads(raw)
         if value.get('schema') != SCHEMA: raise StagePersistenceError('Invalid stage payload')
+        if self.head()!=meta: raise StagePersistenceError('Stage HEAD changed during read')
         return value, meta
 
     def publish(self, value):
-        _, prior = self.read()
+        prior = self.head()
         raw = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
-        if prior and prior['sha256'] == digest(raw): return prior
+        if prior and prior['sha256'] == digest(raw):
+            actual, observed = self.read()
+            if actual != value: raise StagePersistenceError('Unchanged stage failed readback')
+            return observed
         slot = 1 - prior['slot'] if prior else 0
         encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
         parts = [encoded[i:i+24000] for i in range(0, len(encoded), 24000)]
@@ -130,16 +145,30 @@ def context(root):
 def persist(root, phase):
     path,ctx=context(root)
     if path is None:return
+    started=time.monotonic()
     try:
         from scripts.feishu_io import Base
         from scripts.shared_runtime import Store
         current=capture(root,ctx['day'])
+        capture_seconds=time.monotonic()-started
+        fingerprint=digest(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
+        # Only a completed, previously confirmed checkpoint may suppress another
+        # read-only completed stage. Never suppress before-write or failure evidence.
+        if (phase=='completed' and ctx.get('confirmed_phase')=='completed'
+                and ctx.get('confirmed_fingerprint')==fingerprint):
+            ctx['unchanged_stages']=ctx.get('unchanged_stages',0)+1
+            ctx['last_save']={'phase':phase,'skipped_unchanged':True,'seconds':time.monotonic()-started}
+            write(path,ctx)
+            return
         value=delta(load(path.with_name('baseline.json')),current,ctx['parent_generation'],
                     os.environ[LEASE_ENV],ctx['stage'],phase)
         api=Base(Path(root)/'receipts'/ctx['day']/('stage-'+uuid.uuid4().hex))
         Store(api).discover()  # Existing private system table only.
         StageStore(api).publish(value)
         ctx['saves']+=1
+        ctx.update(confirmed_fingerprint=fingerprint,confirmed_phase=phase)
+        ctx['last_save']={'phase':phase,'skipped_unchanged':False,
+                          'capture_seconds':capture_seconds,'seconds':time.monotonic()-started}
         if phase=='before_write':ctx['before_saved']=True
         write(path,ctx)
     except Exception as exc:
@@ -157,6 +186,8 @@ def run_stage(root, name, function, *args, **kwargs):
     path,ctx=context(root)
     if path is None:return function(*args,**kwargs)
     ctx.update(stage=name,before_saved=False);write(path,ctx)
+    started=time.monotonic()
+    print(f'[stage] {name}: started',flush=True)
     try:
         result=function(*args,**kwargs)
     except StagePersistenceError:
@@ -165,4 +196,9 @@ def run_stage(root, name, function, *args, **kwargs):
         persist(root,'failed')
         raise
     persist(root,'completed')
+    elapsed=time.monotonic()-started
+    path,ctx=context(root)
+    ctx.setdefault('stage_timings',[]).append({'stage':name,'seconds':elapsed})
+    write(path,ctx)
+    print(f'[stage] {name}: completed in {elapsed:.1f}s (including evidence persistence)',flush=True)
     return result

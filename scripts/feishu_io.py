@@ -154,10 +154,43 @@ class Base:
             from .shared_runtime import transport_env
         except ImportError:
             from shared_runtime import transport_env
-        result = subprocess.run(args, cwd=ROOT, capture_output=True, encoding='utf-8', timeout=180,
-                                env={**transport_env(ROOT), 'PYTHONIOENCODING': 'utf-8'})
-        (self.receipt_dir / (stamp + '-stdout.json')).write_text(result.stdout, encoding='utf-8')
-        (self.receipt_dir / (stamp + '-stderr.txt')).write_text(result.stderr, encoding='utf-8')
+        for attempt in range(3 if command in READ_COMMANDS and payload is None else 1):
+            attempt_stamp = stamp if attempt == 0 else stamp + f'-read-retry-{attempt}'
+            attempt_args=list(args)
+            retry_output=None
+            if attempt and command=='+record-list' and flags.get('output'):
+                original_output=Path(flags['output'])
+                retry_output=original_output.with_name(original_output.stem+f'-retry-{attempt}'+original_output.suffix)
+                attempt_args[attempt_args.index('--output')+1]=str(retry_output)
+            started = time.monotonic()
+            try:
+                result = subprocess.run(attempt_args, cwd=ROOT, capture_output=True, encoding='utf-8', timeout=180,
+                                        env={**transport_env(ROOT), 'PYTHONIOENCODING': 'utf-8'})
+            except subprocess.TimeoutExpired:
+                save(self.receipt_dir / (attempt_stamp+'-timing.json'),
+                     {'command':command,'table':table,'seconds':time.monotonic()-started,'outcome':'timeout'})
+                if command not in READ_COMMANDS or payload is not None or attempt == 2: raise
+                time.sleep(attempt+1)
+                continue
+            (self.receipt_dir / (attempt_stamp + '-stdout.json')).write_text(result.stdout, encoding='utf-8')
+            (self.receipt_dir / (attempt_stamp + '-stderr.txt')).write_text(result.stderr, encoding='utf-8')
+            save(self.receipt_dir / (attempt_stamp+'-timing.json'),
+                 {'command':command,'table':table,'seconds':time.monotonic()-started,
+                  'returncode':result.returncode,'stdout_bytes':len(result.stdout.encode()),
+                  'stderr_bytes':len(result.stderr.encode())})
+            transient = any(s in (result.stderr+' '+result.stdout).lower() for s in
+                            ('timed out','timeout','tls handshake','connection reset','econnreset','remote disconnected'))
+            if (result.returncode and transient and command in READ_COMMANDS and payload is None and attempt<2):
+                time.sleep(attempt+1)
+                continue
+            if result.returncode==0 and retry_output is not None:
+                # Keep a failed partial artifact; callers still read the requested
+                # filename, while the successful retry keeps its own full receipt.
+                original=ROOT/original_output
+                if original.exists():
+                    shutil.copy2(original,original.with_name(original.name+f'.before-retry-{attempt}'))
+                shutil.copy2(ROOT/retry_output,original)
+            break
         if result.returncode:
             raise RuntimeError(f'{command}: stopped; inspect receipt {stamp}; no retry. {result.stderr[:500]} {result.stdout[:500]}')
         reply = json.loads(result.stdout)

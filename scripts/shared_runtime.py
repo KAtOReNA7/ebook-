@@ -249,22 +249,34 @@ class Store:
         self.api.manifest['tables'][TABLE]['field_readback']['fields'] = fields
         return self
 
+    def head(self):
+        rows = self.api.read(TABLE, [['状态键', '==', 'HEAD']])
+        if len(rows) > 1: raise RuntimeError('Duplicate shared HEAD')
+        if not rows: return None
+        head = rows[0]
+        if digest(head['内容'].encode()) != head['校验值']:
+            raise RuntimeError('Shared HEAD checksum mismatch')
+        return json.loads(head['内容'])
+
     def read(self):
-        rows = self.api.read(TABLE)
+        meta = self.head()
+        if meta is None:
+            raise RuntimeError('No committed shared checkpoint; never use stale local defaults')
+        prefix = 'slot'+str(meta['slot']) if 'slot' in meta else meta['generation']
+        rows = self.api.read(TABLE, [['状态键', 'intersects', prefix+':']])
         index = {r['状态键']: r for r in rows}
         if len(index) != len(rows):
             raise RuntimeError('Duplicate shared-state keys')
-        head = index.get('HEAD')
-        if not head:
-            raise RuntimeError('No committed shared checkpoint; never use stale local defaults')
-        meta = json.loads(head['内容'])
-        if digest(head['内容'].encode()) != head['校验值']:
-            raise RuntimeError('Shared HEAD checksum mismatch')
-        prefix = 'slot'+str(meta['slot']) if 'slot' in meta else meta['generation']
+        for i in range(meta['chunks']):
+            row = index[f'{prefix}:{i:05}']
+            if digest(row['内容'].encode()) != row['校验值']:
+                raise RuntimeError('Shared chunk checksum mismatch')
         encoded = ''.join(index[f"{prefix}:{i:05}"]['内容'] for i in range(meta['chunks']))
         raw = gzip.decompress(base64.b64decode(encoded, validate=True))
         if digest(raw) != meta['sha256']:
             raise RuntimeError('Incomplete or corrupt shared checkpoint')
+        if self.head() != meta:
+            raise RuntimeError('Shared HEAD changed during read; discard mixed observation')
         data = json.loads(raw)
         if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7',SCHEMA}:
             raise RuntimeError('Unknown shared checkpoint schema')
@@ -272,9 +284,7 @@ class Store:
 
     def publish(self, checkpoint):
         raw = json.dumps(checkpoint, ensure_ascii=False, separators=(',', ':')).encode()
-        heads = [r for r in self.api.read(TABLE) if r['状态键'] == 'HEAD']
-        if len(heads) > 1: raise RuntimeError('Duplicate shared HEAD')
-        previous = json.loads(heads[0]['内容']) if heads else {}
+        previous = self.head() or {}
         if previous.get('sha256') == digest(raw):
             verified, meta = self.read()
             if verified != checkpoint: raise RuntimeError('Unchanged checkpoint failed readback')
@@ -285,13 +295,13 @@ class Store:
         parts = [encoded[i:i+24000] for i in range(0, len(encoded), 24000)]
         rows = [{'状态键': f'slot{slot}:{i:05}', '内容': text,
                  '校验值': digest(text.encode())} for i, text in enumerate(parts)]
-        self.api.ensure(TABLE, '状态键', rows, update=True)
+        self.api.ensure(TABLE, '状态键', rows, [['状态键','intersects',f'slot{slot}:']], update=True)
         meta = {'generation': generation, 'slot': slot, 'chunks': len(parts), 'sha256': digest(raw),
                 'saved_at': datetime.now(timezone.utc).isoformat()}
         text = json.dumps(meta, sort_keys=True)
         # Commit the pointer only after every immutable chunk has passed readback.
         self.api.ensure(TABLE, '状态键', [{'状态键': 'HEAD', '内容': text,
-                        '校验值': digest(text.encode())}], update=True)
+                        '校验值': digest(text.encode())}], [['状态键','==','HEAD']], update=True)
         verified, result = self.read()
         if verified != checkpoint or result != meta:
             raise RuntimeError('Checkpoint readback mismatch; keep lock for reconciliation')
@@ -407,6 +417,9 @@ def capture(root, day):
             paths.update((directory/folder).glob('*.json'))
             paths.update((directory/folder).glob('*.jsonp'))
         paths.add(directory/'fanqie/snapshot.json')
+        # Each reader attempt retains its own raw responses, including interrupted
+        # attempts. The frozen ledger points here; preserve those bytes cross-host.
+        paths.update((directory/'fanqie').rglob('*.json'))
         for folder in directory.glob('publisher-recent-*'):
             paths.update(folder.rglob('*.json'))
     files = {}

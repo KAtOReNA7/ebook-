@@ -95,6 +95,9 @@ def collect_metrics(targets, directory, started):
             continue
         book.update(memberships=[], today_reading_observations=[])
         finalize_today_reading(book, raw)
+        from scripts.coverage import metric_request_failed
+        if metric_request_failed(book):
+            errors.append({'book_id': target['book_id'], 'error': 'today_reading_request_failed'})
         books.append(book)
     return {'schema_version': 'weread.public.v1', 'started_at': started,
             'finished_at': now().isoformat(), 'collection_date': started[:10],

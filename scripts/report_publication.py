@@ -25,7 +25,8 @@ def source_issues(pipeline):
         issues.append('tencent: source/expense reconciliation incomplete')
     c=modules.get('weread',{}).get('coverage',{})
     if (not c.get('requested_books') or c.get('successful_books')!=c.get('requested_books')
-            or c.get('incomplete_boards') or c.get('failed_book_ids') or c.get('missing_book_ids')):
+            or c.get('incomplete_boards') or c.get('failed_book_ids') or c.get('missing_book_ids')
+            or c.get('failed_metric_book_ids')):
         issues.append('weread: requested observations or boards incomplete')
     f=modules.get('fanqie',{})
     if f.get('readback')!='passed' or not verified_count_pair(f.get('projects'),f.get('observations')):

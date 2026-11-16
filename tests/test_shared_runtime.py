@@ -32,8 +32,12 @@ class FakeGit:
 
 class MemoryBase:
     def __init__(self): self.rows = {}; self.fail_chunks = False
-    def read(self, _): return copy.deepcopy(list(self.rows.values()))
-    def ensure(self, table, key, rows, update=False):
+    def read(self, _, conditions=None):
+        rows=list(self.rows.values())
+        for _,op,key in conditions or []:
+            rows=[r for r in rows if (r['状态键']==key if op=='==' else key in r['状态键'])]
+        return copy.deepcopy(rows)
+    def ensure(self, table, key, rows, conditions=None, update=False):
         if self.fail_chunks and any(r[key] != 'HEAD' for r in rows): raise RuntimeError('interrupted')
         for row in rows: self.rows[row[key]] = {**row, 'record_id': row[key]}
 

@@ -1,0 +1,101 @@
+{
+  "baseline": "8df98a9",
+  "synthetic_files": 64,
+  "source_bytes_per_file": 32768,
+  "table_rows": 366,
+  "network": "offline; latency/throughput model only",
+  "results": {
+    "before": {
+      "restore": {
+        "read_calls": 2,
+        "full_table_reads": 1,
+        "page_calls": 6,
+        "write_calls": 0,
+        "returned_bytes": 11633843,
+        "written_bytes": 0,
+        "written_rows": 0,
+        "cpu_wall_seconds": 0.1449,
+        "modeled_network_seconds": 8.219
+      },
+      "publish_changed_checkpoint": {
+        "read_calls": 6,
+        "full_table_reads": 6,
+        "page_calls": 24,
+        "write_calls": 2,
+        "returned_bytes": 52347334,
+        "written_bytes": 33604,
+        "written_rows": 3,
+        "cpu_wall_seconds": 0.4967,
+        "modeled_network_seconds": 35.991
+      },
+      "publish_changed_stage": {
+        "read_calls": 6,
+        "full_table_reads": 0,
+        "page_calls": 8,
+        "write_calls": 2,
+        "returned_bytes": 8728270,
+        "written_bytes": 29103,
+        "written_rows": 3,
+        "cpu_wall_seconds": 0.1365,
+        "modeled_network_seconds": 11.67
+      },
+      "two_unchanged_completed_stages": {
+        "read_calls": 12,
+        "full_table_reads": 0,
+        "page_calls": 22,
+        "write_calls": 16,
+        "returned_bytes": 29093988,
+        "written_bytes": 5813551,
+        "written_rows": 244,
+        "cpu_wall_seconds": 0.6079,
+        "modeled_network_seconds": 44.658
+      }
+    },
+    "after": {
+      "restore": {
+        "read_calls": 6,
+        "full_table_reads": 0,
+        "page_calls": 7,
+        "write_calls": 0,
+        "returned_bytes": 5817841,
+        "written_bytes": 0,
+        "written_rows": 0,
+        "cpu_wall_seconds": 0.0851,
+        "modeled_network_seconds": 8.11
+      },
+      "publish_changed_checkpoint": {
+        "read_calls": 8,
+        "full_table_reads": 0,
+        "page_calls": 11,
+        "write_calls": 2,
+        "returned_bytes": 13087511,
+        "written_bytes": 33604,
+        "written_rows": 3,
+        "cpu_wall_seconds": 0.2253,
+        "modeled_network_seconds": 15.503
+      },
+      "publish_changed_stage": {
+        "read_calls": 8,
+        "full_table_reads": 0,
+        "page_calls": 8,
+        "write_calls": 2,
+        "returned_bytes": 4365203,
+        "written_bytes": 29103,
+        "written_rows": 3,
+        "cpu_wall_seconds": 0.0983,
+        "modeled_network_seconds": 10.838
+      },
+      "two_unchanged_completed_stages": {
+        "read_calls": 0,
+        "full_table_reads": 0,
+        "page_calls": 0,
+        "write_calls": 0,
+        "returned_bytes": 0,
+        "written_bytes": 0,
+        "written_rows": 0,
+        "cpu_wall_seconds": 0.0732,
+        "modeled_network_seconds": 0.0
+      }
+    }
+  }
+}

@@ -130,13 +130,19 @@ class Archive:
         self.sources = []
 
     def get(self, url, name):
-        stamp = now()
+        try:
+            from .read_retry import read_get
+        except ImportError:
+            from read_retry import read_get
+        failures=[]
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
                                                   "Referer": "https://changdunovel.com/"})
         try:
             open_url = self.opener.open if self.opener is not None else urllib.request.urlopen
-            with open_url(req, timeout=25) as response:
-                raw, status, final = response.read(), response.status, response.url
+            def fetch():
+                with open_url(req, timeout=25) as response:
+                    return response.read(), response.status, response.url
+            raw, status, final = read_get(fetch, failures)
         except urllib.error.HTTPError as exc:
             raw, status, final = exc.read(), exc.code, exc.url
         path = self.directory / name
@@ -150,7 +156,8 @@ class Archive:
         safe_final = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
                                              urllib.parse.urlencode(safe_query), ""))
         evidence = {"url": url, "final_url": safe_final, "http_status": status,
-                    "observed_at": stamp, "response_sha256": hashlib.sha256(raw).hexdigest(),
+                    "observed_at": now(), "failed_get_attempts": failures,
+                    "response_sha256": hashlib.sha256(raw).hexdigest(),
                     "response_bytes": len(raw), "archive_path": str(path.resolve())}
         self.sources.append(evidence)
         write_json(path.with_suffix(path.suffix + ".source.json"), evidence)

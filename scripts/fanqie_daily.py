@@ -1,6 +1,7 @@
 """Daily Fanqie metrics and precision-aware milestone outbox."""
 from datetime import date, timedelta
 import json
+import uuid
 from pathlib import Path
 try:
     from .feishu_io import Base, ROOT
@@ -99,6 +100,33 @@ def current_scope(all_projects):
     return marketing,resolved,pending
 
 
+def collect_frozen(directory, projects, day):
+    """Isolate interrupted reader attempts; promote only a complete result ledger."""
+    source=directory/'fanqie'/'snapshot.json'
+    if source.exists():return source
+    attempt=source.parent/('attempt-'+uuid.uuid4().hex)
+    arguments=['--output-dir',str(attempt)]
+    expected={str(p['平台作品ID']) for p in projects}
+    for bid in sorted(expected):arguments+=['--book-id',bid]
+    failure=None
+    try:
+        call_script('collect_fanqie.py',arguments,directory/(attempt.name+'-collect.log'))
+    except RuntimeError as exc:
+        failure=exc
+    snapshot=attempt/'snapshot.json'
+    if snapshot.exists():
+        data=json.loads(snapshot.read_text(encoding='utf-8-sig'))
+        ids=[str(b['book_id']) for b in data['books']]+[str(e['book_id']) for e in data.get('errors',[])]
+        if (data.get('schema_version')!='fanqie.public.v1' or data.get('collection_date')!=day
+                or not str(data.get('finished_at','')).startswith(day)
+                or set(ids)!=expected or len(ids)!=len(expected)):
+            raise ValueError('Incomplete or mismatched Fanqie attempt ledger; retain for review')
+        atomic_json(source,data)
+    if failure:raise failure
+    if not source.exists():raise RuntimeError('Fanqie collector produced no finished snapshot')
+    return source
+
+
 def run(args):
     day=shanghai_day()
     directory=ROOT/'runs'/day
@@ -146,11 +174,8 @@ def run(args):
     if not source.exists():
         source=directory/'fanqie'/'snapshot.json'
     if not source.exists():
-        arguments=['--output-dir',str(source.parent)]
-        for project in projects:
-            arguments+=['--book-id',str(project['平台作品ID'])]
         if projects:
-            call_script('collect_fanqie.py',arguments,directory/'fanqie-collect.log')
+            source=collect_frozen(directory,projects,day)
         else:
             return {'date':day,'projects':0,'pending':pending,'status':'no_resolved_projects','write_count':0,
                     'publication_rising_board':publication_rising_status()}

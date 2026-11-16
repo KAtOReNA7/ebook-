@@ -89,6 +89,30 @@ def marketing_index(projects):
             and '营销项目' in options(p.get('监测范围'))}
 
 
+def reuse_snapshot(candidate, source, day, root):
+    """Controlled same-day observation reuse, not reuse of local completion flags."""
+    candidate=Path(candidate)
+    if not candidate.is_absolute():candidate=Path(root)/candidate
+    candidate=candidate.resolve()
+    if not candidate.is_relative_to(Path(root).resolve()):
+        raise ValueError('Ranking reuse evidence must be archived within this workspace')
+    data=verified_snapshot(candidate,day)
+    if source.exists():
+        if verified_snapshot(source,day)!=data:
+            raise ValueError('Cannot replace a previously frozen ranking observation')
+        return
+    # Never overwrite raw evidence left by an interrupted local freeze.
+    for name in ('directory.json','ranking.json'):
+        target=source.with_name(name)
+        if target.exists() and target.read_bytes()!=candidate.with_name(name).read_bytes():
+            raise ValueError('Unfinished ranking freeze differs; reconcile first')
+    source.parent.mkdir(parents=True,exist_ok=True)
+    for name in ('directory.json','ranking.json'):
+        source.with_name(name).write_bytes(candidate.with_name(name).read_bytes())
+    atomic_json(source,data)
+    verified_snapshot(source,day)
+
+
 def entry_events(previous, current, projects):
     """Only consecutive complete daily observations establish a new entry."""
     if previous is None or previous.get('complete') is not True or current.get('complete') is not True:
@@ -215,6 +239,9 @@ def run(args, root=ROOT, api=None, clock=now):
             raise RuntimeError('Ranking mutation requires reconciliation')
         verified_snapshot(source, day)
         return {**state['summary'], 'replayed': True, 'write_count': 0, 'dry_run': args.dry_run}
+    candidate=getattr(args,'fanqie_ranking_source',None)
+    if candidate:
+        reuse_snapshot(candidate,source,day,root)
     if not source.exists():
         # A partial local archive is retained; use a new attempt directory, then
         # freeze a successful normalized snapshot with its exact raw evidence.

@@ -53,11 +53,19 @@ def write_json(path, data):
 
 
 def get(url):
+    try:
+        from .read_retry import read_get
+    except ImportError:
+        from read_retry import read_get
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=25) as res:
-        raw = res.read()
-        evidence = {"url": url, "http_status": res.status, "observed_at": now(),
-                    "response_bytes": len(raw), "response_sha256": hashlib.sha256(raw).hexdigest()}
+    failures=[]
+    def fetch():
+        with urllib.request.urlopen(req, timeout=25) as res:
+            return res.read(), res.status
+    raw,status=read_get(fetch,failures)
+    evidence = {"url": url, "http_status": status, "observed_at": now(),
+                "response_bytes": len(raw), "response_sha256": hashlib.sha256(raw).hexdigest(),
+                "failed_get_attempts": failures}
     return raw.decode("utf-8"), evidence
 
 
@@ -339,8 +347,10 @@ def main():
         if not bid:
             continue
         books.setdefault(bid, {"book_id": bid, "memberships": [], "today_reading_observations": []}).update(detail)
-    for book in books.values():
-        finalize_today_reading(book, raw_dir)
+    # Independent book searches; same bounded concurrency as detail requests.
+    # A failed search never causes successful details or other books to be fetched again.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda book: finalize_today_reading(book, raw_dir), books.values()))
     data = {"schema_version": "weread.public.v1", "timezone": "Asia/Shanghai", "started_at": started,
         "finished_at": now(), "collection_date": started[:10], "scheduled_for": None,
         "run_kind": args.run_kind, "field_mapping": MAPPING, "charts": charts,
