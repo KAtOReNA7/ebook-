@@ -20,9 +20,16 @@ def business_snapshot(api, runtime):
     tables = [name for name in api.manifest['tables'] if name != '系统运行状态']
     # Include every business table, including notification state, independent of
     # which tables happened to change in the latest daily run.
-    rows = {name: sorted(api.read(name), key=lambda r:r['record_id']) for name in sorted(tables)}
-    rows['__workflow__'] = api.call('+workflow-get',workflow_id=runtime['native_workflow'])['data']
-    return rows
+    prior_size = getattr(api,'read_page_size',2000)
+    try:
+        # Shared text chunks need small pages; ordinary business records use the
+        # already verified normal limit, avoiding 100-row historical scans.
+        api.read_page_size = 2000
+        rows = {name: sorted(api.read(name), key=lambda r:r['record_id']) for name in sorted(tables)}
+        rows['__workflow__'] = api.call('+workflow-get',workflow_id=runtime['native_workflow'])['data']
+        return rows
+    finally:
+        api.read_page_size = prior_size
 
 
 def migrate(api, store, mutex, execute, receipt):

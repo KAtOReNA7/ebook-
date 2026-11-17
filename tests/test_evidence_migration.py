@@ -7,10 +7,19 @@ from unittest.mock import patch,Mock
 
 from tests.test_shared_runtime import MemoryBase
 from scripts.shared_runtime import Store,Mutex,digest,SCHEMA
-from tools.migrate_evidence_store import migrate
+from tools.migrate_evidence_store import migrate,business_snapshot
 
 
 class MigrationTests(unittest.TestCase):
+    def test_business_pages_do_not_inherit_small_evidence_page_limit(self):
+        api=Mock();api.manifest={'tables':{'business':{},'系统运行状态':{}}};api.read_page_size=100
+        def read(table):
+            self.assertEqual(api.read_page_size,2000)
+            return [{'record_id':'r'}]
+        api.read.side_effect=read;api.call.return_value={'data':{'status':'synthetic'}}
+        business_snapshot(api,{'native_workflow':'test'})
+        self.assertEqual(api.read_page_size,100)
+        api.read.assert_called_once_with('business')
     def test_preview_no_state_mutation_and_conversion_preserves_every_file(self):
         with TemporaryDirectory() as d:
             api=MemoryBase();store=Store(api)

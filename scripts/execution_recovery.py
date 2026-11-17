@@ -43,7 +43,12 @@ def verify_plans(api, plans):
     # Read each affected table completely, then verify every field of every
     # planned mutation, including later updates to an earlier row.
     for table, plan in plans.get('tables', {}).items():
-        actual = api.read(table)
+        prior_size = getattr(api,'read_page_size',2000)
+        try:
+            api.read_page_size = 2000
+            actual = api.read(table)
+        finally:
+            api.read_page_size = prior_size
         key = plan['key']
         keyed = [r for r in actual if r.get(key)]
         index = {r[key]:r for r in keyed}
