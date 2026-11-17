@@ -143,7 +143,7 @@ def gh(repo, endpoint, payload=None):
             event('coordination_http', started, method=method, attempt=attempt, http_status=status)
     try:
         from scripts.read_retry import read_get
-        return read_get(request_once) if payload is None else request_once()
+        return read_get(request_once, record_kind=None) if payload is None else request_once()
     except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
         failure = type(error).__name__ + ':' + str(getattr(error,'code','transport'))
         raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + failure) from error
@@ -455,6 +455,9 @@ def capture(root, day):
         paths.update((directory/'fanqie').rglob('*.json'))
         for folder in directory.glob('publisher-recent-*'):
             paths.update(folder.rglob('*.json'))
+        for pattern in ('raw-weread-*', 'fanqie-rising-attempt-*'):
+            for folder in directory.glob(pattern):
+                paths.update(folder.rglob('*.json'))
     files = {}
     for path in sorted(paths):
         if not path.is_file(): continue
@@ -527,6 +530,8 @@ def restore(root, checkpoint, day=None):
             candidates.update((directory/folder).glob('*.json'))
             candidates.update((directory/folder).glob('*.jsonp'))
         for folder in directory.glob('publisher-recent-*'):candidates.update(folder.rglob('*.json'))
+        for pattern in ('raw-weread-*', 'fanqie-rising-attempt-*'):
+            for folder in directory.glob(pattern):candidates.update(folder.rglob('*.json'))
     for path in candidates:
         name=path.relative_to(root).as_posix()
         if path.is_file() and name not in checkpoint['files']:

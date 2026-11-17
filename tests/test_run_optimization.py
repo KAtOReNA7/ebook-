@@ -12,13 +12,55 @@ from scripts.run_performance import summarize
 from scripts.sampling_reuse import eligible_snapshot, verified_copy
 from scripts.shared_runtime import LEASE_ENV, digest, gh
 from scripts.stage_checkpoint import start, run_stage, context, before_mutation
-from scripts.shared_runtime import capture
+from scripts.shared_runtime import capture, restore
+from scripts.read_retry import read_get
 
 
 class OptimizationTests(unittest.TestCase):
     def setUp(self):
         helper = patch("scripts.runner_policy.host_fingerprint", return_value="test-host")
         helper.start(); self.addCleanup(helper.stop)
+
+    def test_raw_sampling_bytes_survive_cold_restore_and_uncommitted_are_quarantined(self):
+        with TemporaryDirectory() as source, TemporaryDirectory() as target:
+            rel = Path('runs/2099-01-01/raw-weread-100000/detail.json')
+            file = Path(source)/rel; file.parent.mkdir(parents=True)
+            file.write_bytes(b'{\r\n"id": 123\r\n}')
+            snapshot = capture(source, '2099-01-01')
+            stale = Path(target)/'runs/2099-01-01/raw-weread-090000/stale.json'
+            stale.parent.mkdir(parents=True); stale.write_text('{}')
+            restore(target, snapshot, '2099-01-01')
+            self.assertEqual((Path(target)/rel).read_bytes(), file.read_bytes())
+            self.assertFalse(stale.exists())
+            self.assertEqual(len(list((Path(target)/'backups').rglob('stale.json'))), 1)
+
+    def test_incomplete_status_is_not_reusable_even_after_previous_success(self):
+        with TemporaryDirectory() as d, patch.dict(os.environ, {LEASE_ENV:'lease'}, clear=True):
+            root=Path(d); start(root,capture(root,'2099-01-01'),{'generation':'g'},'lease')
+            with patch('scripts.stage_checkpoint.persist'):
+                run_stage(root,'notification_health',lambda:{'status':'ok'})
+                _, ctx = context(root)
+                path = root/'runs'/ctx['day']/'stage-progress.json'
+                self.assertIn('notification_health', json.loads(path.read_text())['completed'])
+                for status in ('waiting','read_error','source_review_required','requires_review'):
+                    run_stage(root,'notification_health',lambda:{'status':status})
+                    self.assertNotIn('notification_health', json.loads(path.read_text())['completed'])
+
+    def test_source_attempt_telemetry_preserves_retry_and_never_records_url(self):
+        with TemporaryDirectory() as d, patch.dict(os.environ, {'EBOOK_PERFORMANCE_DIR':d}, clear=True):
+            operation=Mock(side_effect=[urllib.error.HTTPError('https://secret.invalid/?token=private',503,'',{},None),(b'abc',200)])
+            with patch('scripts.read_retry.time.sleep') as sleep:
+                self.assertEqual(read_get(operation),(b'abc',200))
+            sleep.assert_called_once_with(1)
+            rows=[json.loads(p.read_text()) for p in Path(d).glob('*.json')]
+            self.assertEqual(len(rows),2)
+            self.assertNotIn('secret.invalid',json.dumps(rows))
+            self.assertNotIn('private',json.dumps(rows))
+            result=summarize(rows,10)['stages']['coordinator']
+            self.assertEqual(result['source_http_calls'],2)
+            self.assertEqual(result['source_body_bytes'],3)
+            self.assertEqual(result['read_retries'],1)
+            self.assertEqual(result['backoff_seconds'],1)
 
     def test_lost_ack_confirms_entire_batch_without_repeating_write(self):
         with TemporaryDirectory() as d:

@@ -226,6 +226,7 @@ def _run_stage(root, name, function, *args, **kwargs):
     ctx.update(stage=name,before_saved=False);write(path,ctx)
     progress_path = Path(root)/'runs'/ctx['day']/PROGRESS
     progress = read(progress_path, {'completed': {}})
+    progress['completed'].pop(name, None)
     progress.update(execution={'host':host_fingerprint(), 'root':str(Path(root).resolve()), 'pid':os.getpid()},
                     current_stage=name)
     write(progress_path, progress)
@@ -239,7 +240,7 @@ def _run_stage(root, name, function, *args, **kwargs):
         persist(root,'failed')
         raise
     path,ctx=context(root)
-    if isinstance(result, dict) and result.get('status') not in {'failed','requires_review','blocked','paused'}:
+    if isinstance(result, dict) and result.get('status') in {'completed','partial','ok'}:
         progress['completed'][name] = result
     write(progress_path, progress)
     # Only deterministic, local event preparation may share its save with the

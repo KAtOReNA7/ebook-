@@ -18,9 +18,11 @@ import urllib.request
 try:
     from .parse_tencent import parse_package
     from .local_settings import SOURCE_URL
+    from .read_retry import read_get
 except ImportError:
     from parse_tencent import parse_package
     from local_settings import SOURCE_URL
+    from read_retry import read_get
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = SOURCE_URL
@@ -60,9 +62,10 @@ def main():
     opener.addheaders = [('User-Agent', 'Mozilla/5.0'), ('Referer', SOURCE)]
 
     def fetch(url, name, requested=None):
-        with opener.open(url, timeout=45) as response:
-            data = response.read()
-            status = response.status
+        def request_once():
+            with opener.open(url, timeout=45) as response:
+                return response.read(), response.status
+        data, status = read_get(request_once)
         (out / name).write_bytes(data)
         text = data.decode('utf-8-sig')
         metadata = {'file': name, 'http_status': status, 'bytes': len(data),

@@ -14,9 +14,11 @@ from pathlib import Path
 try:
     from .collect_weread import now, listing_time, rating, write_json
     from .session_store import load_session
+    from .read_retry import read_get
 except ImportError:
     from collect_weread import now, listing_time, rating, write_json
     from session_store import load_session
+    from read_retry import read_get
 
 ENDPOINT = 'https://i.weread.qq.com/shelf/opus'
 
@@ -36,9 +38,11 @@ def fetch_recent(provider, session):
         'osver': '11', 'channelId': '900',
         'vid': str(session['vid']), 'accessToken': session['accessToken'],
     })
-    try:
+    def request_once():
         with urllib.request.build_opener(NoRedirect).open(req, timeout=25) as response:
-            status, raw = response.status, response.read(20 * 1024 * 1024 + 1)
+            return response.status, response.read(20 * 1024 * 1024 + 1)
+    try:
+        status, raw = read_get(request_once)
     except urllib.error.HTTPError as error:
         status, raw = error.code, error.read(1024 * 1024)
     if len(raw) > 20 * 1024 * 1024:

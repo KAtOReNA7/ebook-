@@ -20,7 +20,9 @@ def event(kind, started, **values):
            'finished_at': datetime.now(timezone.utc).isoformat(),
            'seconds': time.monotonic()-started, **values}
     path = Path(folder)/(uuid.uuid4().hex+'.json')
-    path.write_text(json.dumps(row, ensure_ascii=False), encoding='utf-8')
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(row, ensure_ascii=False), encoding='utf-8')
+    os.replace(temporary, path)
 
 
 @contextmanager
@@ -56,6 +58,7 @@ def summarize(rows, wall_seconds):
     for row in rows:
         group = stages.setdefault(row['stage'], {'cli_calls': 0, 'cli_seconds_sum': 0,
             'response_artifact_bytes': 0, 'request_bytes': 0, 'read_retries': 0,
+            'source_http_calls': 0, 'source_seconds_sum': 0, 'source_body_bytes': 0, 'backoff_seconds': 0,
             'coordination_http_calls': 0, 'coordination_seconds_sum': 0, 'spans': []})
         if row['kind'] == 'cli':
             group['cli_calls'] += 1
@@ -67,6 +70,12 @@ def summarize(rows, wall_seconds):
             group['coordination_http_calls'] += 1
             group['coordination_seconds_sum'] += row['seconds']
             group['read_retries'] += int(row.get('attempt', 1) > 1)
+        elif row['kind'] == 'source_http':
+            group['source_http_calls'] += 1
+            group['source_seconds_sum'] += row['seconds']
+            group['source_body_bytes'] += row.get('body_bytes', 0)
+            group['backoff_seconds'] += row.get('backoff_seconds', 0)
+            group['read_retries'] += int(row.get('attempt', 1) > 1)
         elif row['kind'] == 'span':
             group['spans'].append({k: row[k] for k in ('name', 'seconds', 'outcome')})
             if row.get('parent_stage') and row['parent_stage'] != row['stage']:
@@ -77,7 +86,7 @@ def summarize(rows, wall_seconds):
             child = pending.pop()
             if child in seen: continue
             seen.add(child); pending.extend(children.get(child, []))
-        for field in ('cli_calls','coordination_http_calls','response_artifact_bytes','request_bytes','read_retries'):
+        for field in ('cli_calls','coordination_http_calls','source_http_calls','source_body_bytes','backoff_seconds','response_artifact_bytes','request_bytes','read_retries'):
             group['inclusive_'+field] = sum(stages.get(child, {}).get(field, 0) for child in seen)
     return {'wall_seconds': wall_seconds, 'stages': stages,
             'notes': ['Wall time includes failures and recovery inside this invocation.',
