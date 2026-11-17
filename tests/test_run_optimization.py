@@ -1,6 +1,9 @@
 import copy
 import json
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -20,6 +23,16 @@ class OptimizationTests(unittest.TestCase):
     def setUp(self):
         helper = patch("scripts.runner_policy.host_fingerprint", return_value="test-host")
         helper.start(); self.addCleanup(helper.stop)
+
+    def test_documented_file_entry_bootstraps_package_without_pythonpath(self):
+        with TemporaryDirectory() as d:
+            root=Path(d)
+            shutil.copytree(Path(__file__).resolve().parents[1]/'scripts',root/'scripts',
+                            ignore=shutil.ignore_patterns('__pycache__'))
+            result=subprocess.run([sys.executable,'-I',str(root/'scripts/daily_run.py'),'--help'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn('--run-kind',result.stdout)
 
     def test_raw_sampling_bytes_survive_cold_restore_and_uncommitted_are_quarantined(self):
         with TemporaryDirectory() as source, TemporaryDirectory() as target:

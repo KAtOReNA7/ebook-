@@ -17,6 +17,12 @@ import subprocess
 import sys
 import uuid
 
+# Keep the documented file entry equivalent to importing scripts.daily_run.
+# This must precede performance setup, which imports the package itself.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = 'scripts'
+
 try:
     from .feishu_io import Base, ROOT, same
     from .rules import board_events, recommendation_events
