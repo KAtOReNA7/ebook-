@@ -14,6 +14,10 @@ def exclusion_reason(row):
     medium=n.get('service_medium')
     content=str(n.get('service') or n.get('service_content') or '')
     if medium=='audio' or re.search('有声|畅听|听书|收听',content): return 'confirmed_audio'
+    # Owner instruction 2026-11-17: an empty 事务 cell is not an ordered service.
+    # Existing disappeared services are still detected by plan_import for review.
+    if row.get('source_sheet_name')=='番茄渠道专用' and not content.strip():
+        return 'service_details_pending'
     if medium!='ebook': return 'medium_unconfirmed'
     return None
 

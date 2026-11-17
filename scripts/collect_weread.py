@@ -7,6 +7,7 @@ Details archives contain the extracted book metadata, not chapter content/user s
 import argparse
 import hashlib
 import json
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -16,6 +17,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 TZ = timezone(timedelta(hours=8))
 ROOT = Path(__file__).resolve().parents[1]
+if __package__ in (None, ''):
+    sys.path.insert(0, str(ROOT))
+    __package__ = 'scripts'
 CHARTS = {
     "rising": "微信读书飙升榜Top50",
     "newbook": "微信读书新书榜Top50",

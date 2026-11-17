@@ -51,6 +51,7 @@ DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-
     'notification-digest-queue.json','notification-digest.apply-state.json','tencent-outbox.json',
     'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
 DAY_STATES.update({'notification-comparison.json','notification-recovery.apply-state.json',
+                   'tencent-source-review.apply-state.json',
                    'stage-progress.json','stage-write-plans.json',
                    'notification-comparison-projects.json','daily-report-context.json',
                    'daily-reports.apply-state.json','report-resend.apply-state.json',

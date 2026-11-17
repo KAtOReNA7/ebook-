@@ -76,6 +76,8 @@ def summarize(rows, wall_seconds):
             group['source_body_bytes'] += row.get('body_bytes', 0)
             group['backoff_seconds'] += row.get('backoff_seconds', 0)
             group['read_retries'] += int(row.get('attempt', 1) > 1)
+        elif row['kind'] == 'stage_result':
+            group['business_status'] = row.get('business_status')
         elif row['kind'] == 'span':
             group['spans'].append({k: row[k] for k in ('name', 'seconds', 'outcome')})
             if row.get('parent_stage') and row['parent_stage'] != row['stage']:
@@ -92,6 +94,7 @@ def summarize(rows, wall_seconds):
             'notes': ['Wall time includes failures and recovery inside this invocation.',
                       'Spans may overlap; their sum is not total elapsed time.',
                       'CLI calls are not HTTP calls. Artifact bytes are not wire traffic.',
+                      'A returned span is not business success; blocked stages cannot count as completed-work speedups.',
                       'Separate invocations are retained separately; gaps must be included in incident comparisons.']}
 
 

@@ -10,6 +10,27 @@ from tests import test_source_review as source_fixtures
 from scripts.initialize_manual_projects import build_plan
 
 class ElectronicScopeTests(unittest.TestCase):
+    def test_fanqie_empty_service_stays_out_and_existing_service_requires_review(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            row,source,_,_=source_fixtures.SourceReviewTests().fixture(root)
+            row['source_sheet_name']='番茄渠道专用'
+            row['normalized'].update(service_medium='ebook',service='好评30条')
+            def write():
+                source.write_text(json.dumps({'schema_version':'tencent.marketing-rows.v1','rows':[row]}),encoding='utf-8')
+            write()
+            before=plan_import(source,[],[],override_path=root/'absent.json',scope_policy={'enabled':True})
+            old=before['services'][0]['fields']
+            for blank in (None,'','  '):
+                row['normalized']['service']=blank; write()
+                new=plan_import(source,[],[],override_path=root/'absent.json',scope_policy={'enabled':True})
+                self.assertEqual(new['services'],[])
+                self.assertEqual(new['projects'],[])
+                self.assertEqual(new['summary']['excluded_by_reason'],{'service_details_pending':1})
+                changed=plan_import(source,[],[old],override_path=root/'absent.json',scope_policy={'enabled':True})
+                self.assertFalse(changed['safe_to_apply'])
+                self.assertTrue(changed['source_changes'])
+
     def test_authoritative_fee_total_keeps_rounding_difference_but_not_bundle_ambiguity(self):
         with TemporaryDirectory() as tmp:
             root=Path(tmp)

@@ -210,9 +210,12 @@ def before_mutation(root, table):
 
 
 def run_stage(root, name, function, *args, **kwargs):
-    from scripts.run_performance import span
+    from scripts.run_performance import span, event
     with span(name):
-        return _run_stage(root, name, function, *args, **kwargs)
+        started=time.monotonic()
+        result=_run_stage(root, name, function, *args, **kwargs)
+        event('stage_result', started, business_status=result.get('status') if isinstance(result,dict) else None)
+        return result
 
 
 def _run_stage(root, name, function, *args, **kwargs):

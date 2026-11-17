@@ -33,6 +33,14 @@ class OptimizationTests(unittest.TestCase):
                                   cwd=root,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertIn('--run-kind',result.stdout)
+            output=root/'snapshot.json'
+            result=subprocess.run([sys.executable,'-I',str(root/'scripts/collect_weread.py'),
+                '--no-charts','--skip-details','--output',str(output)],cwd=root,
+                capture_output=True,text=True,timeout=20,env={**os.environ,LEASE_ENV:'test-lease'})
+            self.assertEqual(result.returncode,0,result.stderr)
+            snapshot=json.loads(output.read_text(encoding='utf-8'))
+            self.assertEqual(snapshot['execution_lease_sha256'],digest(b'test-lease'))
+            self.assertEqual(snapshot['books'],[])
 
     def test_raw_sampling_bytes_survive_cold_restore_and_uncommitted_are_quarantined(self):
         with TemporaryDirectory() as source, TemporaryDirectory() as target:
@@ -165,8 +173,10 @@ class OptimizationTests(unittest.TestCase):
         rows=[{'kind':'cli','stage':'a','seconds':3,'attempt':2,'response_bytes':100},
               {'kind':'span','stage':'a','name':'a','outcome':'failed','seconds':10},
               {'kind':'coordination_http','stage':'a','seconds':2,'attempt':1}]
+        rows.append({'kind':'stage_result','stage':'a','seconds':10,'business_status':'requires_review'})
         result=summarize(rows,12)
         self.assertEqual(result['wall_seconds'],12)
         self.assertEqual(result['stages']['a']['cli_calls'],1)
         self.assertEqual(result['stages']['a']['coordination_http_calls'],1)
         self.assertEqual(result['stages']['a']['read_retries'],1)
+        self.assertEqual(result['stages']['a']['business_status'],'requires_review')
