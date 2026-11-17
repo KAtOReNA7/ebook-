@@ -514,7 +514,7 @@ def capture(root, day):
 
 def restore(root, checkpoint, day=None):
     """Restore only committed portable files; back up local values, never credentials."""
-    root = Path(root)
+    root = Path(root).resolve()
     from scripts.daily_run import atomic_json
     backup = root/'backups'/('shared-cache-'+uuid.uuid4().hex)
     validated = [(safe_path(root, name), name, value) for name, value in checkpoint['files'].items()]

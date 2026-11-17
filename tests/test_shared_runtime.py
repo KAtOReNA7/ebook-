@@ -53,6 +53,16 @@ class SharedRuntimeTests(unittest.TestCase):
                 json.dumps({'evidence':'research/example.json'}),encoding='utf-8')
             snapshot=capture(root/'alias'/'..','2026-11-13')
             self.assertEqual(snapshot['files']['research/example.json']['text'],'{}')
+            reviewed=root/'runs/2026-11-13/tencent-source-reviewed'
+            reviewed.mkdir(parents=True)
+            (reviewed/'filtered-rows.json').write_text('{}',encoding='utf-8')
+            (reviewed.parent/'tencent-daily-import-plan.json').write_text(json.dumps({
+                'source_file':'runs/2026-11-13/tencent-source-reviewed/filtered-rows.json'}),encoding='utf-8')
+            snapshot=capture(root/'alias'/'..','2026-11-13')
+            stale=reviewed/'uncommitted.json';stale.write_text('{}',encoding='utf-8')
+            restore(root/'alias'/'..',snapshot,'2026-11-13')
+            self.assertFalse(stale.exists())
+            self.assertTrue((reviewed/'filtered-rows.json').exists())
 
     def test_reviewed_tencent_replacement_keeps_both_frozen_sources(self):
         with TemporaryDirectory() as directory:
@@ -163,7 +173,7 @@ class SharedRuntimeTests(unittest.TestCase):
                 path.write_text('{"phase":"requires_review"}')
                 self.assertIn(str(path), unknown_guard_paths(root))
                 checkpoint = capture(root, '2026-11-09')
-                self.assertIn(str(path), checkpoint['unresolved_guards'])
+                self.assertIn(str(path.resolve()), checkpoint['unresolved_guards'])
                 path.write_text('{"phase":"finished"}')
             self.assertEqual(unknown_guard_paths(root), [])
 
