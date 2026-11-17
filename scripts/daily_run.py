@@ -178,6 +178,12 @@ def load_snapshot(path, expected_day):
 
 
 def call_script(name, arguments, log_path, timeout=1800):
+    from scripts.run_performance import span
+    with span(Path(name).stem):
+        return _call_script(name, arguments, log_path, timeout)
+
+
+def _call_script(name, arguments, log_path, timeout=1800):
     with log_path.open('w', encoding='utf-8') as log:
         try:
             result = subprocess.run([sys.executable, str(ROOT / 'scripts' / name), *arguments],
@@ -310,7 +316,13 @@ def deliver_event_rows(api, rows, day):
     for row in missing:
         enforce_recipients(row, ROOT)
     for offset in range(0, len(missing), 200):
-        api.call('+record-batch-create', '通知事件', {'create_records': missing[offset:offset + 200]})
+        batch = missing[offset:offset + 200]
+        if hasattr(api, 'confirmed_batch'):
+            api.confirmed_batch('+record-batch-create', '通知事件', {'create_records': batch},
+                '事件唯一键', batch, conditions, immutable_fields=[
+                    '事件唯一键','事件类型','关联项目','规则ID','判定证据','通知标题','通知正文','收件人','采集批次'])
+        else:
+            api.call('+record-batch-create', '通知事件', {'create_records': batch})
     readback = api.read('通知事件', conditions) if missing else existing
     verified = {row['事件唯一键']: row for row in readback}
     if len(verified) != len(readback):
@@ -436,10 +448,18 @@ def run(args):
 
 
 def main():
+    from scripts.run_performance import execution
+    with execution(ROOT):
+        return main_entry()
+
+
+def main_entry():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run-kind', choices=['scheduled', 'local'], default='local')
     parser.add_argument('--dry-run', action='store_true', help='Reads and local plans only; no Base mutation')
     parser.add_argument('--shadow', action='store_true', help='Force local event outbox only, even if runtime enables notifications')
+    parser.add_argument('--resume-interrupted', action='store_true',
+                        help='Reconcile original same-host lease, remote plans and process death before continuing completed stages')
     parser.add_argument('--tencent-source', help='Reviewed replacement frozen source directory; retain the original observation for audit')
     parser.add_argument('--fanqie-supplement', help='Same-day frozen snapshot covering only failed Fanqie IDs; preserve original observations')
     parser.add_argument('--fanqie-ranking-source', help='Explicitly reuse a verified same-day complete ranking snapshot and its sibling raw evidence; never replace a frozen ranking')
@@ -451,9 +471,9 @@ def main():
         from shared_runtime import session
         from runner_policy import enforce_writer
     from scripts.stage_checkpoint import run_stage
-    with process_lock(ROOT / 'runs' / '.daily.lock'), session(ROOT, args.dry_run, staged=True) as shared:
+    with process_lock(ROOT / 'runs' / '.daily.lock'), session(ROOT, args.dry_run, staged=True, resume=args.resume_interrupted) as shared:
         if shared and shared.get('skipped'):
-            print(json.dumps({'date': shanghai_day(), 'status': 'already_running_elsewhere',
+            print(json.dumps({'date': shanghai_day(), 'status': shared.get('reason', 'already_running_elsewhere'),
                               'shared_runtime': shared, 'process_exit_code': 0}, ensure_ascii=False))
             return 0
         if not args.dry_run:

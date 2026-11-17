@@ -24,6 +24,8 @@ except ImportError:
     from sync_weread import sync
     from initialize_manual_projects import unknown_guard_paths
 
+from scripts.run_performance import timed, span
+
 
 DATE_FIELDS = [
     {'name': '首次进入最近上架日', 'type': 'datetime', 'style': {'format': 'yyyy/MM/dd'},
@@ -84,11 +86,19 @@ def ensure_schema(api, root):
     save(root/'config/publisher-recent-view.json', {'view_id': view, 'filter': actual_filter, 'visible_fields': visible})
 
 
-def collect_metrics(targets, directory, started):
+@timed('publisher_metrics')
+def collect_metrics(targets, directory, started, reusable=None):
     raw = directory/'raw-details'
     raw.mkdir(parents=True, exist_ok=True)
     books, errors = [], []
+    reused = 0
     for target in targets:
+        from scripts.sampling_reuse import verified_copy
+        book = verified_copy((reusable or {}).get(str(target['book_id'])), target, raw, started[:10])
+        if book is not None:
+            books.append(book)
+            reused += 1
+            continue
         book = collect_detail((target['book_id'], target['reader_url'], raw))
         if book.get('status') != 'ok':
             errors.append(book)
@@ -102,6 +112,7 @@ def collect_metrics(targets, directory, started):
     return {'schema_version': 'weread.public.v1', 'started_at': started,
             'finished_at': now().isoformat(), 'collection_date': started[:10],
             'field_mapping': MAPPING, 'charts': [], 'books': books, 'detail_errors': errors,
+            'same_execution_reused_books': reused,
             'gaps': ['版权方最近上架新进入作品追踪；非Top50榜单样本。',
                      '累计阅读人数定义未核实，留空；今日阅读不累加为累计读者。']}
 
@@ -140,7 +151,8 @@ def run(args, root=ROOT, api=None, clock=now):
     directory.mkdir(parents=True)
     try:
         session = load_session(root/config['session_file'])
-        source_summary = collect(providers, session, directory/'lists')
+        with span('publisher_lists'):
+            source_summary = collect(providers, session, directory/'lists')
         observations = [(p, read(directory/'lists'/f'provider-{i}.json')) for i,p in enumerate(providers)]
         if any(s.get('source', {}).get('http_status') == 401 for _, s in observations):
             try:
@@ -149,7 +161,8 @@ def run(args, root=ROOT, api=None, clock=now):
                 from weread_session import renew
             try:
                 session = renew(root/config['session_file'])
-                source_summary = collect(providers, session, directory/'lists-renewed')
+                with span('publisher_lists'):
+                    source_summary = collect(providers, session, directory/'lists-renewed')
                 observations = [(p, read(directory/'lists-renewed'/f'provider-{i}.json')) for i,p in enumerate(providers)]
             except Exception as exc:
                 source_summary['renewal_error_type'] = type(exc).__name__
@@ -159,7 +172,9 @@ def run(args, root=ROOT, api=None, clock=now):
         observations = []
     proposed, report = observe(previous, observations, day)
     targets = report['active_targets']
-    data = collect_metrics(targets, directory, stamp.isoformat())
+    from scripts.sampling_reuse import eligible_snapshot
+    reusable = eligible_snapshot(root/'runs'/day/'weread.json', day)
+    data = collect_metrics(targets, directory, stamp.isoformat(), reusable)
     if data['finished_at'][:10] != day:
         raise RuntimeError('Collection crossed midnight; preserve evidence and rerun on actual day')
     source = directory/'metrics.json'
@@ -177,8 +192,9 @@ def run(args, root=ROOT, api=None, clock=now):
     # All mutations, including schema changes, are protected before dispatch.
     atomic_json(state_path, {'phase': 'apply_in_progress', 'date': day, 'evidence': str(directory)})
     ensure_schema(api, root)
-    result = sync(data, source, args.run_kind, api=api,
-                  recent_tracks={t['book_id']: t for t in targets})
+    with span('publisher_business_sync'):
+        result = sync(data, source, args.run_kind, api=api,
+                      recent_tracks={t['book_id']: t for t in targets})
     atomic_json(registry_path, proposed)
     summary.update(base_writes=api.changes, sync=result, registry_committed=True, readback='passed')
     atomic_json(state_path, {'phase': 'finished', 'date': day, 'summary': summary})

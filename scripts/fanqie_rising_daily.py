@@ -248,7 +248,9 @@ def run(args, root=ROOT, api=None, clock=now):
         attempt = directory/('fanqie-rising-attempt-'+stamp.strftime('%H%M%S-%f'))
         archive = ranking_archive(attempt)
         try:
-            result = collect(archive)
+            from scripts.run_performance import span
+            with span('fanqie_ranking_collect'):
+                result = collect(archive)
         except Exception as exc:
             atomic_json(attempt/'failure.json', {'error': str(exc), 'sources': archive.sources})
             return {'status': 'failed', 'complete': False, 'write_count': 0,

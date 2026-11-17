@@ -153,7 +153,7 @@ class NotificationHealthTests(unittest.TestCase):
             code = daily_run.main()
         self.assertEqual(calls, ['initialize', 'sources', 'project_notifications', 'marketing_expense_notifications', 'notification_digest', 'health'])
         self.assertEqual(code, 1)
-        summary = write.call_args.args[1]
+        summary = next(c.args[1] for c in reversed(write.call_args_list) if str(c.args[0]).endswith('pipeline-summary.json'))
         self.assertIn('notification_delivery', summary)
         self.assertEqual(list(summary['modules']), ['weread', 'project_notifications', 'marketing_expense_notifications', 'notification_comparison', 'report_validation', 'notification_digest'])
 

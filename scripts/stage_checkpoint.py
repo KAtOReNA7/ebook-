@@ -10,7 +10,7 @@ import uuid
 from scripts.shared_runtime import TABLE, LEASE_ENV, capture, digest, safe_path
 
 ENV = 'EBOOK_STAGE_CONTEXT'
-SCHEMA = 'ebook-stage-journal.v1'
+SCHEMA = 'ebook-stage-journal.v2'
 HEAD = 'stage:HEAD'
 
 
@@ -30,6 +30,8 @@ def load(path):
 class StageStore:
     def __init__(self, api):
         self.api = api
+        from scripts.evidence_store import EvidenceStore
+        self.evidence = EvidenceStore(api)
 
     def rows(self):
         return self.api.read(TABLE, [['状态键', 'intersects', 'stage:']])
@@ -41,11 +43,11 @@ class StageStore:
         head = rows[0]
         if digest(head['内容'].encode()) != head['校验值']: raise StagePersistenceError('Stage HEAD checksum differs')
         meta = json.loads(head['内容'])
-        if meta.get('schema') != SCHEMA or meta.get('slot') not in (0, 1):
+        if meta.get('schema') not in ('ebook-stage-journal.v1', SCHEMA) or meta.get('slot') not in (0, 1):
             raise StagePersistenceError('Unknown stage journal schema')
         return meta
 
-    def read(self):
+    def read(self, *, fresh=True):
         meta = self.head()
         if meta is None: return None, None
         rows = self.api.read(TABLE, [['状态键','intersects',f"stage:slot{meta['slot']}:"]])
@@ -58,17 +60,21 @@ class StageStore:
         raw = gzip.decompress(base64.b64decode(encoded, validate=True))
         if digest(raw) != meta['sha256']: raise StagePersistenceError('Stage payload checksum differs')
         value = json.loads(raw)
-        if value.get('schema') != SCHEMA: raise StagePersistenceError('Invalid stage payload')
+        if value.get('schema') not in ('ebook-stage-journal.v1', SCHEMA): raise StagePersistenceError('Invalid stage payload')
+        if value.get('storage'):
+            value = self.evidence.thaw(value, fresh=fresh)
         if self.head()!=meta: raise StagePersistenceError('Stage HEAD changed during read')
         return value, meta
 
     def publish(self, value):
         prior = self.head()
-        raw = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
-        if prior and prior['sha256'] == digest(raw):
-            actual, observed = self.read()
+        logical = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
+        if prior and prior.get('content_sha256',prior['sha256']) == digest(logical):
+            actual, observed = self.read(fresh=False)
             if actual != value: raise StagePersistenceError('Unchanged stage failed readback')
             return observed
+        wire = self.evidence.freeze(value) if value.get('schema') == SCHEMA else value
+        raw = json.dumps(wire, ensure_ascii=False, separators=(',', ':')).encode()
         slot = 1 - prior['slot'] if prior else 0
         encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
         parts = [encoded[i:i+24000] for i in range(0, len(encoded), 24000)]
@@ -77,11 +83,12 @@ class StageStore:
         # Chunk writes are read back before moving the pointer. Unknown outcomes
         # retain the global lease; no business action is retried here.
         self.api.ensure(TABLE, '状态键', rows, [['状态键','intersects',prefix]], update=True)
-        meta = {'schema':SCHEMA,'slot':slot,'chunks':len(parts),'sha256':digest(raw),'generation':uuid.uuid4().hex}
+        meta = {'schema':value.get('schema'),'slot':slot,'chunks':len(parts),'sha256':digest(raw),'generation':uuid.uuid4().hex}
+        if wire.get('storage'): meta['content_sha256'] = digest(logical)
         text = json.dumps(meta, sort_keys=True)
         self.api.ensure(TABLE,'状态键',[{'状态键':HEAD,'内容':text,'校验值':digest(text.encode())}],
                         [['状态键','==',HEAD]], update=True)
-        actual, observed = self.read()
+        actual, observed = self.read(fresh=False)
         if actual != value or observed != meta: raise StagePersistenceError('Stage journal readback differs')
         return meta
 
@@ -95,7 +102,7 @@ def delta(base, current, parent, lease, stage, phase):
 
 
 def reconstruct(root, base, parent, journal):
-    if journal.get('schema')!=SCHEMA or journal.get('parent_generation')!=parent:
+    if journal.get('schema') not in ('ebook-stage-journal.v1', SCHEMA) or journal.get('parent_generation')!=parent:
         raise StagePersistenceError('Stage parent checkpoint differs; do not combine runs')
     files = dict(base['files'])
     for name in journal['removed']:
@@ -116,7 +123,7 @@ def require_settled(root, checkpoint, generation, journal):
             raise StagePersistenceError('Interrupted remote stage evidence exists; inspect/reconcile it before any new run')
 
 
-def start(root, base, meta, lease):
+def start(root, base, meta, lease, resume_progress=None):
     folder = Path(root)/'runs'/('.stage-'+uuid.uuid4().hex)
     folder.mkdir(parents=True)
     write(folder/'baseline.json',base)
@@ -126,6 +133,8 @@ def start(root, base, meta, lease):
     # Day belongs to this execution, not yesterday's restored baseline.
     from scripts.daily_run import shanghai_day
     context['day']=shanghai_day()
+    if resume_progress is not None:
+        context['resume_results'] = resume_progress.get('completed', {})
     write(folder/'context.json',context)
     os.environ[ENV]=str(folder/'context.json')
 
@@ -143,6 +152,13 @@ def context(root):
 
 
 def persist(root, phase):
+    from scripts.run_performance import span
+    _, ctx = context(root)
+    with span('stage_evidence_'+(ctx['stage'] if ctx else 'none')+'_'+phase):
+        return _persist(root, phase)
+
+
+def _persist(root, phase):
     path,ctx=context(root)
     if path is None:return
     started=time.monotonic()
@@ -164,7 +180,18 @@ def persist(root, phase):
                     os.environ[LEASE_ENV],ctx['stage'],phase)
         api=Base(Path(root)/'receipts'/ctx['day']/('stage-'+uuid.uuid4().hex))
         Store(api).discover()  # Existing private system table only.
-        StageStore(api).publish(value)
+        store = StageStore(api)
+        try:
+            store.publish(value)
+        except RuntimeError:
+            # A successfully published manifest can lose only its ACK/readback.
+            # Reconcile the complete journal under the original lease, never
+            # rerun the completed business stage or blindly replay its writes.
+            from scripts.shared_runtime import assert_shared_writer
+            assert_shared_writer(root)
+            observed, _ = store.read()
+            if observed != value:
+                raise
         ctx['saves']+=1
         ctx.update(confirmed_fingerprint=fingerprint,confirmed_phase=phase)
         ctx['last_save']={'phase':phase,'skipped_unchanged':False,
@@ -183,9 +210,25 @@ def before_mutation(root, table):
 
 
 def run_stage(root, name, function, *args, **kwargs):
+    from scripts.run_performance import span
+    with span(name):
+        return _run_stage(root, name, function, *args, **kwargs)
+
+
+def _run_stage(root, name, function, *args, **kwargs):
     path,ctx=context(root)
     if path is None:return function(*args,**kwargs)
+    from scripts.execution_recovery import PROGRESS, REUSABLE, read
+    from scripts.runner_policy import host_fingerprint
+    if name in REUSABLE and name in ctx.get('resume_results', {}):
+        print(f'[stage] {name}: using reconciled remote completion, no repeated collection/write', flush=True)
+        return ctx['resume_results'][name]
     ctx.update(stage=name,before_saved=False);write(path,ctx)
+    progress_path = Path(root)/'runs'/ctx['day']/PROGRESS
+    progress = read(progress_path, {'completed': {}})
+    progress.update(execution={'host':host_fingerprint(), 'root':str(Path(root).resolve()), 'pid':os.getpid()},
+                    current_stage=name)
+    write(progress_path, progress)
     started=time.monotonic()
     print(f'[stage] {name}: started',flush=True)
     try:
@@ -195,7 +238,19 @@ def run_stage(root, name, function, *args, **kwargs):
     except BaseException:
         persist(root,'failed')
         raise
-    persist(root,'completed')
+    path,ctx=context(root)
+    if isinstance(result, dict) and result.get('status') not in {'failed','requires_review','blocked','paused'}:
+        progress['completed'][name] = result
+    write(progress_path, progress)
+    # Only deterministic, local event preparation may share its save with the
+    # next comparison. Any external mutation forces the normal before/after pair.
+    deferred = (name in {'project_notifications', 'marketing_expense_notifications'}
+                and not ctx['before_saved'])
+    if deferred:
+        ctx.setdefault('deferred_stages', []).append(name)
+        write(path,ctx)
+    else:
+        persist(root,'completed')
     elapsed=time.monotonic()-started
     path,ctx=context(root)
     ctx.setdefault('stage_timings',[]).append({'stage':name,'seconds':elapsed})

@@ -167,6 +167,8 @@ class Base:
                 result = subprocess.run(attempt_args, cwd=ROOT, capture_output=True, encoding='utf-8', timeout=180,
                                         env={**transport_env(ROOT), 'PYTHONIOENCODING': 'utf-8'})
             except subprocess.TimeoutExpired:
+                from scripts.run_performance import event
+                event('cli', started, command=command, table=table, attempt=attempt+1, outcome='timeout')
                 save(self.receipt_dir / (attempt_stamp+'-timing.json'),
                      {'command':command,'table':table,'seconds':time.monotonic()-started,'outcome':'timeout'})
                 if command not in READ_COMMANDS or payload is not None or attempt == 2: raise
@@ -174,6 +176,13 @@ class Base:
                 continue
             (self.receipt_dir / (attempt_stamp + '-stdout.json')).write_text(result.stdout, encoding='utf-8')
             (self.receipt_dir / (attempt_stamp + '-stderr.txt')).write_text(result.stderr, encoding='utf-8')
+            from scripts.run_performance import event
+            output_path = ROOT/Path(retry_output or flags['output']) if flags.get('output') else None
+            event('cli', started, command=command, table=table, attempt=attempt+1,
+                  returncode=result.returncode,
+                  response_bytes=len(result.stdout.encode())+len(result.stderr.encode())+
+                    (output_path.stat().st_size if output_path and output_path.exists() else 0),
+                  request_bytes=request.stat().st_size if payload is not None else 0)
             save(self.receipt_dir / (attempt_stamp+'-timing.json'),
                  {'command':command,'table':table,'seconds':time.monotonic()-started,
                   'returncode':result.returncode,'stdout_bytes':len(result.stdout.encode()),
@@ -278,10 +287,14 @@ class Base:
         if type(batch_size) is not int or not 1 <= batch_size <= 200:
             raise ValueError('Invalid write batch size')
         for i in range(0, len(new), batch_size):
-            self.call('+record-batch-create', table, {'create_records': new[i:i+batch_size]})
+            batch = new[i:i+batch_size]
+            self.confirmed_batch('+record-batch-create', table, {'create_records': batch},
+                                 key, batch, conditions)
         items = list(updates.items())
         for i in range(0, len(items), batch_size):
-            self.call('+record-batch-update', table, {'update_records': dict(items[i:i+batch_size])})
+            batch = dict(items[i:i+batch_size])
+            self.confirmed_batch('+record-batch-update', table, {'update_records': batch},
+                                 key, list(batch.values()), conditions)
         if new or updates:
             # Acknowledged creates can briefly be absent from filtered lists.
             # Re-read only: never replay a mutation or accept ACK as readback.
@@ -305,6 +318,44 @@ class Base:
                     raise RuntimeError(problem)
                 time.sleep(attempt + 1)
         return index
+
+    def confirmed_batch(self, command, table, payload, key, planned, conditions=None, immutable_fields=None):
+        """Continue after a lost ACK only when the entire exact batch is visible.
+
+        This executes in the original process and lease; it never dispatches a
+        failed POST/PATCH again. Partial/missing/conflicting batches remain unknown.
+        """
+        from scripts.execution_recovery import record_plan
+        record_plan(ROOT, table, key, planned, immutable_fields)
+        pending_before = set(self.receipt_dir.glob('*-PENDING.json')) if hasattr(self,'receipt_dir') else set()
+        try:
+            return self.call(command, table, payload)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            from scripts.shared_runtime import LEASE_ENV
+            if not os.environ.get(LEASE_ENV):
+                raise
+            from scripts.runner_policy import enforce_writer
+            enforce_writer(ROOT)  # Fresh ownership read, including on recovery.
+            verified = self.read(table, conditions)
+            index = {row.get(key): row for row in verified}
+            if len(index) != len(verified):
+                raise RuntimeError('Batch outcome unknown: duplicate keys; do not retry')
+            for expected in planned:
+                actual = index.get(expected[key])
+                fields = immutable_fields or list(expected)
+                if actual is None or any(not same(expected.get(k), self._present(table, actual).get(k)) for k in fields):
+                    raise RuntimeError('Batch outcome unknown: full plan readback differs; do not retry')
+            save(self.receipt_dir/(uuid.uuid4().hex+'-reconciled-batch.json'),
+                 {'command': command, 'table': table, 'key': key, 'planned': planned,
+                  'verified': verified, 'status': 'entire_batch_confirmed_no_replay'})
+            for pending in set(self.receipt_dir.glob('*-PENDING.json'))-pending_before:
+                receipt = json.loads(pending.read_text(encoding='utf-8'))
+                if receipt.get('command') == command and receipt.get('table') == table:
+                    receipt['state'] = 'entire_batch_confirmed_by_independent_readback'
+                    save(pending,receipt)
+                    pending.rename(pending.with_name(pending.name.replace('-PENDING.json','-RECONCILED.json')))
+            self.changes = getattr(self,'changes',0)+len(planned)
+            return {'ok': True, 'reconciled': True}
 
 
 def same(a, b):

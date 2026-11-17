@@ -23,6 +23,10 @@ class MemoryStageBase:
 
 
 class StageCheckpointTests(unittest.TestCase):
+    def setUp(self):
+        helper = patch("scripts.runner_policy.host_fingerprint", return_value="test-host")
+        helper.start(); self.addCleanup(helper.stop)
+
     def files(self,root,day,value):
         directory=root/'runs'/day;directory.mkdir(parents=True,exist_ok=True)
         (directory/'weread.json').write_text(json.dumps({'actual_time':value,'books':[{'book_id':'123'}]}))

@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
+import time
 import uuid
 import urllib.request
 import urllib.error
@@ -25,7 +26,7 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 TABLE = '系统运行状态'
-SCHEMA = 'ebook-shared-checkpoint.v8'
+SCHEMA = 'ebook-shared-checkpoint.v9'
 BRANCH = 'codex/runtime-coordination'
 LEASE_ENV = 'EBOOK_SHARED_LEASE'
 FIELDS = [{'name': name, 'type': 'text'} for name in ('状态键', '内容', '校验值')]
@@ -50,6 +51,7 @@ DAY_STATES = {'weread.json','weread-effective.json','daily-state.json','tencent-
     'notification-digest-queue.json','notification-digest.apply-state.json','tencent-outbox.json',
     'tencent-daily-import-plan.json','daily-plan.json','event-plan.json','event-outbox.json'}
 DAY_STATES.update({'notification-comparison.json','notification-recovery.apply-state.json',
+                   'stage-progress.json','stage-write-plans.json',
                    'notification-comparison-projects.json','daily-report-context.json',
                    'daily-reports.apply-state.json','report-resend.apply-state.json',
                    'report-summary-resend.apply-state.json','production-activation.apply-state.json'})
@@ -123,13 +125,28 @@ def gh(repo, endpoint, payload=None):
         headers={'Authorization':'Bearer '+_github_token,'Accept':'application/vnd.github+json',
                  'Content-Type':'application/json','Cache-Control':'no-cache',
                  'User-Agent':'ebook-shared-runner/1'},method=method)
-    for attempt in range(3 if payload is None else 1):
+    attempt = 0
+    def request_once():
+        nonlocal attempt
+        attempt += 1
+        started = time.monotonic()
+        status = None
         try:
             with opener.open(request,timeout=25) as response:
+                status = getattr(response, 'status', 200)
                 return json.load(response)
-        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
-            failure = type(error).__name__ + ':' + str(getattr(error,'code','transport'))
-    raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + failure)
+        except urllib.error.HTTPError as error:
+            status = error.code
+            raise
+        finally:
+            from scripts.run_performance import event
+            event('coordination_http', started, method=method, attempt=attempt, http_status=status)
+    try:
+        from scripts.read_retry import read_get
+        return read_get(request_once) if payload is None else request_once()
+    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+        failure = type(error).__name__ + ':' + str(getattr(error,'code','transport'))
+        raise RuntimeError('Coordination API failed (writes are never blindly retried): ' + failure) from error
 
 
 class BusyError(RuntimeError):
@@ -231,6 +248,8 @@ def assert_shared_writer(root):
 class Store:
     def __init__(self, api):
         self.api = api
+        from scripts.evidence_store import EvidenceStore
+        self.evidence = EvidenceStore(api)
         # Text-heavy checkpoint rows need a byte-bounded batch, well below the
         # normal 200-record API maximum (20 * 24 KB per request).
         self.api.write_batch_size = 20
@@ -258,7 +277,7 @@ class Store:
             raise RuntimeError('Shared HEAD checksum mismatch')
         return json.loads(head['内容'])
 
-    def read(self):
+    def read(self, *, fresh=True):
         meta = self.head()
         if meta is None:
             raise RuntimeError('No committed shared checkpoint; never use stale local defaults')
@@ -278,17 +297,29 @@ class Store:
         if self.head() != meta:
             raise RuntimeError('Shared HEAD changed during read; discard mixed observation')
         data = json.loads(raw)
-        if data.get('schema') not in {'ebook-shared-checkpoint.v1','ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7',SCHEMA}:
+        supported = {'ebook-shared-checkpoint.v'+str(n) for n in range(1, int(SCHEMA.rsplit('v',1)[1])+1)}
+        if data.get('schema') not in supported:
             raise RuntimeError('Unknown shared checkpoint schema')
+        if data.get('storage'):
+            data = self.evidence.thaw(data, fresh=fresh)
+            if self.head() != meta:
+                raise RuntimeError('Shared HEAD changed during evidence read')
         return data, meta
 
     def publish(self, checkpoint):
-        raw = json.dumps(checkpoint, ensure_ascii=False, separators=(',', ':')).encode()
+        supported = {'ebook-shared-checkpoint.v'+str(n) for n in range(1, int(SCHEMA.rsplit('v',1)[1])+1)}
+        if checkpoint.get('schema') not in supported:
+            raise RuntimeError('Unknown shared checkpoint schema')
         previous = self.head() or {}
-        if previous.get('sha256') == digest(raw):
+        if previous.get('storage') and checkpoint.get('schema') != SCHEMA:
+            raise RuntimeError('Cannot downgrade content-addressed shared schema')
+        logical = json.dumps(checkpoint, ensure_ascii=False, separators=(',', ':')).encode()
+        if previous.get('content_sha256', previous.get('sha256')) == digest(logical):
             verified, meta = self.read()
             if verified != checkpoint: raise RuntimeError('Unchanged checkpoint failed readback')
             return meta
+        value = self.evidence.freeze(checkpoint) if checkpoint.get('schema') == SCHEMA else checkpoint
+        raw = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
         encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
         generation = uuid.uuid4().hex
         slot = 1 - previous['slot'] if 'slot' in previous else 0
@@ -298,6 +329,8 @@ class Store:
         self.api.ensure(TABLE, '状态键', rows, [['状态键','intersects',f'slot{slot}:']], update=True)
         meta = {'generation': generation, 'slot': slot, 'chunks': len(parts), 'sha256': digest(raw),
                 'saved_at': datetime.now(timezone.utc).isoformat()}
+        if value.get('storage'):
+            meta.update(storage=value['storage'], content_sha256=digest(logical))
         text = json.dumps(meta, sort_keys=True)
         # Commit the pointer only after every immutable chunk has passed readback.
         self.api.ensure(TABLE, '状态键', [{'状态键': 'HEAD', '内容': text,
@@ -528,7 +561,7 @@ def restore(root, checkpoint, day=None):
 
 
 @contextmanager
-def session(root, dry_run=False, staged=False):
+def session(root, dry_run=False, staged=False, resume=False):
     if not configured(root):
         yield None
         return
@@ -542,33 +575,75 @@ def session(root, dry_run=False, staged=False):
     mutex = Mutex(config['coordination_repository'], receipt_path=
                   root/'receipts'/shanghai_day()/('mutex-acquire-'+uuid.uuid4().hex+'.json'))
     old_env = os.environ.get(LEASE_ENV)
+    from scripts.evidence_store import CACHE_ENV, lease_cache
+    old_cache = os.environ.pop(CACHE_ENV, None)
     from scripts.stage_checkpoint import ENV as STAGE_ENV, StageStore, require_settled, start
     old_stage = os.environ.pop(STAGE_ENV, None)
     acquired = False
     entered = False
     try:
-        if not dry_run:
+        if resume and (dry_run or not staged):
+            raise ValueError('Controlled resume requires the staged daily entry')
+        if not dry_run and not resume:
             try:
                 os.environ[LEASE_ENV] = mutex.acquire()
             except BusyError:
                 yield {'skipped': True, 'reason': 'another_execution_owns_shared_lock', 'business_writes': 0}
                 return
             acquired = True
+            os.environ[CACHE_ENV] = lease_cache(root, os.environ[LEASE_ENV])
         api = Base(root/'receipts'/shanghai_day()/('shared-state-'+uuid.uuid4().hex))
         store = Store(api).discover()
-        checkpoint, meta = store.read()
-        journal, _ = StageStore(api).read()
-        require_settled(root,checkpoint,meta['generation'],journal)
+        from scripts.run_performance import span
+        with span('shared_restore'):
+            checkpoint, meta = store.read()
+            journal, _ = StageStore(api).read(fresh=False)
+        resume_progress = None
+        baseline = checkpoint
+        if resume:
+            from scripts.execution_recovery import prepare
+            checkpoint, resume_progress, recovery_counts = prepare(root,checkpoint,meta,journal,mutex,api,shanghai_day())
+            os.environ[LEASE_ENV] = mutex.token
+            acquired = True
+            # Mark entered before cache restoration: a recovery exception must
+            # retain the original lease, never release an interrupted writer.
+            entered = True
+            os.environ[CACHE_ENV] = lease_cache(root, mutex.token)
+            store = Store(api).discover()
+            verified_base, verified_meta = store.read()
+            verified_journal, _ = StageStore(api).read()
+            if verified_base != baseline or verified_meta != meta or verified_journal != journal:
+                raise RuntimeError('Recovery authority changed during reconciliation')
+            from scripts.daily_run import atomic_json
+            atomic_json(api.receipt_dir/'resume-readback.json', {'stage':journal['stage'], 'tables':recovery_counts})
+        else:
+            require_settled(root,checkpoint,meta['generation'],journal)
         if checkpoint.get('unresolved_guards'):
             raise RuntimeError('Shared checkpoint has unresolved mutations; reconcile from server evidence')
         restore(root, checkpoint, shanghai_day())
-        if staged and not dry_run:start(root,checkpoint,meta,os.environ[LEASE_ENV])
+        if resume_progress:
+            from scripts.execution_recovery import REUSABLE
+            if REUSABLE <= set(resume_progress.get('completed', {})):
+                from scripts.operational_validation import workflow_issues
+                runtime = load(root/'config/runtime.json')
+                issues = workflow_issues(api.call('+workflow-get', workflow_id=runtime['native_workflow'])['data'],
+                    runtime, api.read('通知事件'), api._fields('通知事件'))
+                if issues: raise RuntimeError('Recovered publication outcome requires reconciliation: '+str(issues))
+                with span('final_shared_commit'):
+                    saved = commit_checkpoint(store, capture(root, shanghai_day()), mutex)
+                    mutex.release()
+                acquired = False
+                yield {'skipped': True, 'reason':'shared_commit_recovered', 'business_writes':0,
+                       'checkpoint_committed':True, 'lock_released':True, 'committed_generation':saved['generation']}
+                return
+        if staged and not dry_run:start(root,baseline,meta,os.environ[LEASE_ENV],resume_progress)
         entered = True
         result = {'generation': meta['generation'], 'restored_files': len(checkpoint['files'])}
         yield result
         if not dry_run:
-            saved = commit_checkpoint(store, capture(root, shanghai_day()), mutex)
-            mutex.release()
+            with span('final_shared_commit'):
+                saved = commit_checkpoint(store, capture(root, shanghai_day()), mutex)
+                mutex.release()
             acquired = False
             result.update(checkpoint_committed=True, committed_generation=saved['generation'], lock_released=True)
     finally:
@@ -580,3 +655,5 @@ def session(root, dry_run=False, staged=False):
         else: os.environ[LEASE_ENV] = old_env
         if old_stage is None:os.environ.pop(STAGE_ENV,None)
         else:os.environ[STAGE_ENV]=old_stage
+        if old_cache is None:os.environ.pop(CACHE_ENV,None)
+        else:os.environ[CACHE_ENV]=old_cache

@@ -235,7 +235,8 @@ def collect_chart(cid, raw_dir):
                     "recommendation_percent": rating(info.get("newRating")),
                     "recommendation_raw": info.get("newRating"), "today_reading_count": row.get("readingCount"),
                     "platform_publish_time": info.get("publishTime"), "detail_url": detail_url(info),
-                    "source_url": url, "observed_at": evidence["observed_at"]})
+                    "source_url": url, "observed_at": evidence["observed_at"],
+                    "archive_path": str(archive.resolve()), "response_sha256": evidence["response_sha256"]})
             next_cursor = max(row.get("searchIdx", 0) for row in rows)
             if next_cursor >= 50 or next_cursor <= cursor or not data.get("hasMore"):
                 break
@@ -273,6 +274,7 @@ def collect_detail(task):
         archive = raw_dir / ("detail-" + actual_id + ".json")
         write_json(archive, raw_metadata)
         evidence.update({"archive_path": str(archive.resolve()),
+                         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                          "archive_scope": "extracted metadata; full HTML/chapter contents/user state not retained"})
         result = {"book_id": actual_id, "status": "ok", "title": info.get("title"),
             "author": info.get("author"), "word_count": info.get("totalWords"),
@@ -320,7 +322,8 @@ def main():
             books[bid]["memberships"].append({"chart_id": chart["chart_id"], "rank": row["rank"]})
             books[bid]["today_reading_observations"].append({
                 "value": row["today_reading_count"], "observed_at": row["observed_at"],
-                "source_url": row["source_url"], "chart_id": chart["chart_id"]})
+                "source_url": row["source_url"], "chart_id": chart["chart_id"],
+                "archive_path": row["archive_path"], "response_sha256": row["response_sha256"]})
     tasks = [(bid, b["detail_url"], raw_dir) for bid, b in books.items() if b["detail_url"]]
     if args.tracked_json:
         tracked = json.loads(args.tracked_json.read_text(encoding="utf-8-sig"))
@@ -360,6 +363,10 @@ def main():
                      c["chart_name"] + "采集不完整，不能判断上榜或下榜。" for c in charts if not c["complete_top50"]]
                  + (["部分作品今日阅读缺失；具体原因见各书today_reading_missing_reason。"]
                     if any(b["today_reading_count"] is None for b in books.values()) else [])}
+    import os
+    from scripts.shared_runtime import LEASE_ENV
+    if os.environ.get(LEASE_ENV):
+        data['execution_lease_sha256'] = hashlib.sha256(os.environ[LEASE_ENV].encode()).hexdigest()
     write_json(args.output, data)
     print(json.dumps({"output": str(args.output.resolve()), "books": len(books), "detail_errors": len(data["detail_errors"]),
         "charts": [{"id": c["chart_id"], "status": c["status"], "count": len(c["records"])} for c in charts]}, ensure_ascii=False))

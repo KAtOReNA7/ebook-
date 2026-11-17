@@ -110,13 +110,13 @@ class SharedRuntimeTests(unittest.TestCase):
     def test_new_checkpoint_version_and_backward_read(self):
         with TemporaryDirectory() as directory:
             value = capture(Path(directory), '2026-11-09')
-            self.assertEqual(value['schema'], 'ebook-shared-checkpoint.v8')
+            self.assertEqual(value['schema'], 'ebook-shared-checkpoint.v9')
             store = Store(MemoryBase())
-            for schema in ('ebook-shared-checkpoint.v1', 'ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7','ebook-shared-checkpoint.v8'):
+            for schema in ('ebook-shared-checkpoint.v1', 'ebook-shared-checkpoint.v2','ebook-shared-checkpoint.v3','ebook-shared-checkpoint.v4','ebook-shared-checkpoint.v5','ebook-shared-checkpoint.v6','ebook-shared-checkpoint.v7','ebook-shared-checkpoint.v8','ebook-shared-checkpoint.v9'):
                 store.publish({**value, 'schema': schema})
                 self.assertEqual(store.read()[0]['schema'], schema)
             with self.assertRaisesRegex(RuntimeError, 'schema'):
-                store.publish({**value, 'schema': 'ebook-shared-checkpoint.v9'})
+                store.publish({**value, 'schema': 'ebook-shared-checkpoint.v10'})
 
     def test_pre_publication_gate_client_rejects_new_checkpoint(self):
         store=Store(MemoryBase())
