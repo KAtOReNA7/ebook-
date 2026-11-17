@@ -405,6 +405,7 @@ def run(args):
         if row['book_id'] not in frozen_ids:
             gaps.append('冻结快照未包含新增追踪作品 ' + row['book_id'] + '，次日补采；不伪造当日值。')
     summary = {'date': day, 'status': 'partial', 'coverage': coverage, 'run_kind': args.run_kind,
+               'sampling_progress': data.get('sampling_progress', {}),
                'snapshot_reused': reused, 'snapshot_started_at': data['started_at'],
                'source': str(run_dir / ('weread-effective.json' if args.dry_run and (run_dir / 'weread-effective.json').exists() else 'weread.json')),
                'baseline': baseline, 'candidate_events': len(candidates), 'pending': rule_pending,

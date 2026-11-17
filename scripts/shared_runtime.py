@@ -654,7 +654,8 @@ def session(root, dry_run=False, staged=False, resume=False):
                 yield {'skipped': True, 'reason':'shared_commit_recovered', 'business_writes':0,
                        'checkpoint_committed':True, 'lock_released':True, 'committed_generation':saved['generation']}
                 return
-        if staged and not dry_run:start(root,baseline,meta,os.environ[LEASE_ENV],resume_progress)
+        if staged and not dry_run:start(root,baseline,meta,os.environ[LEASE_ENV],resume_progress,
+                                       restored_checkpoint=checkpoint)
         entered = True
         result = {'generation': meta['generation'], 'restored_files': len(checkpoint['files'])}
         yield result

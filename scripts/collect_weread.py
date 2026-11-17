@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import sys
+import uuid
 import time
 import urllib.parse
 import urllib.request
@@ -172,10 +173,13 @@ def collect_search_today(book, raw_dir, max_pages=10):
     return result
 
 
-def finalize_today_reading(book, raw_dir):
+def finalize_today_reading(book, raw_dir, journal=None):
     observations = [o for o in book["today_reading_observations"] if is_count(o.get("value"))]
     if not observations and not book.get("memberships"):
-        search = collect_search_today(book, raw_dir)
+        search = journal.take('reading', book['book_id']) if journal else None
+        if search is None:
+            search = collect_search_today(book, raw_dir)
+            if journal: journal.save('reading', book['book_id'], search)
         book["today_reading_search"] = search
         if search["source"]:
             observations.append(search["source"])
@@ -259,6 +263,18 @@ def collect_chart(cid, raw_dir):
             "records": records, "requests": requests, "errors": errors}
 
 
+def parsed_detail(info, reading_stat, url, evidence):
+    return {"book_id": str(info.get("bookId", "")), "status": "ok", "title": info.get("title"),
+        "author": info.get("author"), "word_count": info.get("totalWords"),
+        "publisher": info.get("publisher"), "category": info.get("category"),
+        "copyright_provider": info.get("copyrightInfo", {}).get("name"),
+        "copyright_provider_id": info.get("copyrightInfo", {}).get("id"),
+        "reviewer_count": info.get("newRatingCount"), "recommendation_percent": rating(info.get("newRating")),
+        "recommendation_raw": info.get("newRating"), "platform_publish_time": info.get("publishTime"),
+        "platform_listing_time": listing_time(info.get("onTime")), "platform_listing_time_raw": info.get("onTime"),
+        "reader_page_reading_count_raw": reading_stat.get("readingCount"), "detail_url": url, "detail_source": evidence}
+
+
 def collect_detail(task):
     bid, url, raw_dir = task
     try:
@@ -280,17 +296,7 @@ def collect_detail(task):
         evidence.update({"archive_path": str(archive.resolve()),
                          "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                          "archive_scope": "extracted metadata; full HTML/chapter contents/user state not retained"})
-        result = {"book_id": actual_id, "status": "ok", "title": info.get("title"),
-            "author": info.get("author"), "word_count": info.get("totalWords"),
-            "publisher": info.get("publisher"), "category": info.get("category"),
-            "copyright_provider": info.get("copyrightInfo", {}).get("name"),
-            "copyright_provider_id": info.get("copyrightInfo", {}).get("id"),
-            "reviewer_count": info.get("newRatingCount"), "recommendation_percent": rating(info.get("newRating")),
-            "recommendation_raw": info.get("newRating"), "platform_publish_time": info.get("publishTime"),
-            "platform_listing_time": listing_time(info.get("onTime")),
-            "platform_listing_time_raw": info.get("onTime"),
-            "reader_page_reading_count_raw": reader.get("readingStat", {}).get("readingCount"),
-            "detail_url": url, "detail_source": evidence}
+        result = parsed_detail(info, reader.get('readingStat', {}), url, evidence)
         time.sleep(0.2)
         return result
     except Exception as exc:
@@ -308,8 +314,10 @@ def main():
     parser.add_argument("--run-kind", choices=["manual_feasibility", "supplement"], default="manual_feasibility")
     args = parser.parse_args()
     started = now()
-    raw_dir = args.output.parent / ("raw-weread-" + datetime.now(TZ).strftime("%H%M%S"))
+    raw_dir = args.output.parent / ("raw-weread-" + datetime.now(TZ).strftime("%H%M%S")+'-'+uuid.uuid4().hex[:8])
     raw_dir.mkdir(parents=True, exist_ok=True)
+    from scripts.weread_progress import Journal
+    journal = Journal(ROOT, raw_dir, started[:10])
     if args.no_charts and args.charts:
         parser.error('--no-charts and --charts are mutually exclusive')
     charts = [] if args.no_charts else [collect_chart(cid, raw_dir) for cid in (args.charts or CHARTS)]
@@ -344,8 +352,15 @@ def main():
         tasks += [(None, u, raw_dir) for u in json.loads(args.book_urls.read_text(encoding="utf-8-sig")) if u not in known_urls]
     details = []
     if not args.skip_details:
+        def observed_detail(task):
+            bid, url, _ = task
+            result = journal.take('detail', bid, url) if bid else None
+            if result is None:
+                result = collect_detail(task)
+                journal.save('detail', result.get('book_id'), result)
+            return result
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for i, result in enumerate(pool.map(collect_detail, tasks)):
+            for i, result in enumerate(pool.map(observed_detail, tasks)):
                 details.append(result)
                 if (i + 1) % 20 == 0:
                     print("metadata fetched:", i + 1, "/", len(tasks), flush=True)
@@ -357,7 +372,7 @@ def main():
     # Independent book searches; same bounded concurrency as detail requests.
     # A failed search never causes successful details or other books to be fetched again.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda book: finalize_today_reading(book, raw_dir), books.values()))
+        list(pool.map(lambda book: finalize_today_reading(book, raw_dir, journal), books.values()))
     data = {"schema_version": "weread.public.v1", "timezone": "Asia/Shanghai", "started_at": started,
         "finished_at": now(), "collection_date": started[:10], "scheduled_for": None,
         "run_kind": args.run_kind, "field_mapping": MAPPING, "charts": charts,
@@ -371,6 +386,7 @@ def main():
     from scripts.shared_runtime import LEASE_ENV
     if os.environ.get(LEASE_ENV):
         data['execution_lease_sha256'] = hashlib.sha256(os.environ[LEASE_ENV].encode()).hexdigest()
+    data['sampling_progress'] = journal.stats
     write_json(args.output, data)
     print(json.dumps({"output": str(args.output.resolve()), "books": len(books), "detail_errors": len(data["detail_errors"]),
         "charts": [{"id": c["chart_id"], "status": c["status"], "count": len(c["records"])} for c in charts]}, ensure_ascii=False))

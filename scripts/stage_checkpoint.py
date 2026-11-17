@@ -123,7 +123,7 @@ def require_settled(root, checkpoint, generation, journal):
             raise StagePersistenceError('Interrupted remote stage evidence exists; inspect/reconcile it before any new run')
 
 
-def start(root, base, meta, lease, resume_progress=None):
+def start(root, base, meta, lease, resume_progress=None, restored_checkpoint=None):
     folder = Path(root)/'runs'/('.stage-'+uuid.uuid4().hex)
     folder.mkdir(parents=True)
     write(folder/'baseline.json',base)
@@ -133,6 +133,8 @@ def start(root, base, meta, lease, resume_progress=None):
     # Day belongs to this execution, not yesterday's restored baseline.
     from scripts.daily_run import shanghai_day
     context['day']=shanghai_day()
+    from scripts.weread_progress import allowed_files
+    context['sampling_allowed'] = allowed_files(restored_checkpoint or base, context['day'])
     if resume_progress is not None:
         context['resume_results'] = resume_progress.get('completed', {})
     write(folder/'context.json',context)

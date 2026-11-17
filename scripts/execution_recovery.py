@@ -37,9 +37,10 @@ def record_plan(root, table, key, rows, immutable_fields=None):
     atomic_json(target, plans)
 
 
-def verify_plans(api, plans):
+def inspect_plans(api, plans):
+    """Complete readback; absence is NOT proof that a request was never sent."""
     from scripts.feishu_io import same
-    counts = {}
+    tables, issues = {}, []
     # Read each affected table completely, then verify every field of every
     # planned mutation, including later updates to an earlier row.
     for table, plan in plans.get('tables', {}).items():
@@ -52,14 +53,76 @@ def verify_plans(api, plans):
         key = plan['key']
         keyed = [r for r in actual if r.get(key)]
         index = {r[key]:r for r in keyed}
-        if len(index) != len(keyed):
-            raise RuntimeError('Recovery readback contains duplicate keys: '+table)
+        duplicate = len(index) != len(keyed)
+        outcomes = []
         for identity, expected in plan['rows'].items():
             row = index.get(identity)
-            if row is None or any(not same(v, api._present(table, row).get(k)) for k,v in expected.items()):
-                raise RuntimeError('Recovery plan differs from complete readback: '+table)
-        counts[table] = {'read_rows': len(actual), 'verified_plan_rows':len(plan['rows'])}
-    return counts
+            mismatches = list(expected) if row is None else [k for k,v in expected.items()
+                             if not same(v, api._present(table, row).get(k))]
+            status = ('duplicate_key' if duplicate else 'not_observed' if row is None
+                      else 'conflicting_fields' if mismatches else 'confirmed')
+            outcome = {'identity': identity, 'status': status, 'differing_fields': mismatches}
+            outcomes.append(outcome)
+            if status != 'confirmed': issues.append({'table':table, **outcome})
+        # Even an empty plan cannot hide duplicate existing keys.
+        if duplicate and not outcomes: issues.append({'table': table, 'status': 'duplicate_key'})
+        tables[table] = {'read_rows':len(actual), 'verified_plan_rows':sum(r['status']=='confirmed' for r in outcomes),
+                         'planned_rows': len(outcomes), 'outcomes':outcomes}
+    return {'status':'requires_reconciliation' if issues else 'confirmed', 'tables':tables, 'issues':issues,
+            'business_writes':0, 'messages_created':0}
+
+
+def verify_plans(api, plans):
+    result = inspect_plans(api, plans)
+    if result['issues']:
+        raise RuntimeError('Recovery plan differs from complete readback: '+
+                           ', '.join(sorted({i['table'] for i in result['issues']})))
+    return {name: {k:v[k] for k in ('read_rows','verified_plan_rows')} for name,v in result['tables'].items()}
+
+
+def recovery_report(root, checkpoint, meta, journal, lock, api, day, check_process=True):
+    """Produce a repeatable, non-mutating recovery decision from remote evidence."""
+    from scripts.shared_runtime import digest
+    from scripts.stage_checkpoint import reconstruct
+    result={'schema':'ebook-recovery-plan.v1','day':day,'base_generation':meta['generation'],
+            'business_writes':0,'messages_created':0,'blockers':[], 'ready_to_resume':False}
+    if not journal or journal.get('parent_generation') != meta['generation']:
+        return {**result,'status':'no_matching_interrupted_stage'}
+    recovered=reconstruct(root,checkpoint,meta['generation'],journal)
+    result.update(stage=journal['stage'], phase=journal['phase'])
+    if journal.get('phase') == 'completed' and recovered == checkpoint:
+        return {**result, 'status':'already_committed'}
+    if lock.get('phase')!='busy' or journal['lease_sha256']!=digest(lock.get('token','').encode()):
+        result['blockers'].append('Original lease does not match; never acquire or steal it')
+    if recovered['day'] != day:result['blockers'].append('Historical execution cannot resume automatically')
+    guards=recovered.get('unresolved_guards',[])
+    result['unresolved_guards']=guards
+    if guards:result['blockers'].append('Unknown mutation guards require reconciliation; no guard is cleared')
+    def content(name, default):
+        value=recovered['files'].get('runs/'+recovered['day']+'/'+name)
+        return json.loads(value['text']) if value else default
+    progress=content(PROGRESS,{})
+    completed=progress.get('completed',{})
+    valid={k:v for k,v in completed.items() if v.get('status') in {'completed','partial','ok'}}
+    if len(valid)!=len(completed):result['blockers'].append('Invalid completed-stage status')
+    result['completed_stages']=sorted(valid)
+    result['remaining_stages']=sorted(REUSABLE-set(valid))
+    result['publication_readback_required']=True
+    result['process_stopped_verified']=False
+    if check_process:
+        try:
+            assert_original_stopped(progress.get('execution',{}),root)
+            result['process_stopped_verified']=True
+        except RuntimeError as exc:result['blockers'].append(str(exc))
+    else:result['blockers'].append('Original process has not been verified stopped')
+    # Reconcile even guarded/partial plans, but never use a mismatch to resend.
+    result['readback']=inspect_plans(api,content(PLANS,{'tables':{}}))
+    if result['readback']['issues']:result['blockers'].append('Full table readback does not confirm all planned writes')
+    result['ready_to_resume']=not result['blockers']
+    result['status']='ready_for_controlled_resume' if result['ready_to_resume'] else 'requires_reconciliation'
+    result['next_action']=('python scripts/daily_run.py --run-kind scheduled --resume-interrupted'
+                           if result['ready_to_resume'] else 'Keep evidence and original lease; reconcile blockers without replaying writes')
+    return result
 
 
 def assert_original_stopped(execution, root):

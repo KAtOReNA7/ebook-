@@ -9,11 +9,13 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from scripts.feishu_io import Base,save
 from scripts.shared_runtime import Store,Mutex,configuration,safe_path,digest
 from scripts.stage_checkpoint import StageStore,reconstruct
+from scripts.execution_recovery import recovery_report
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--export-evidence',action='store_true',help='Export verified evidence into a new private receipts directory; never restore active caches')
+    parser.add_argument('--reconcile',action='store_true',help='Read affected tables completely and generate a recovery plan; no mutations, unlock or retry')
     args=parser.parse_args()
     day=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
     output=ROOT/'receipts'/day/('stage-recovery-'+uuid.uuid4().hex)
@@ -22,6 +24,14 @@ def main():
     _,_,lock=Mutex(configuration(ROOT)['coordination_repository']).head()
     result={'read_only':True,'business_writes':0,'messages_created':0,'mutex':lock['phase'],
             'base_generation':meta['generation'],'status':'no_interrupted_stage'}
+    if args.reconcile:
+        plan=recovery_report(ROOT,checkpoint,meta,journal,lock,api,day)
+        # A changing authority cannot produce a reusable recovery approval.
+        _,_,after=Mutex(configuration(ROOT)['coordination_repository']).head()
+        if store.head()!=meta or after!=lock or StageStore(api).read()[0]!=journal:
+            raise RuntimeError('Recovery authority changed during readback; discard the plan')
+        save(output/'recovery-plan.json',plan)
+        result['recovery_plan']={k:plan[k] for k in ('status','ready_to_resume','blockers')}
     if journal and journal['parent_generation']==meta['generation']:
         recovered=reconstruct(ROOT,checkpoint,meta['generation'],journal)
         result.update(status='requires_reconciliation',stage=journal['stage'],phase=journal['phase'],
