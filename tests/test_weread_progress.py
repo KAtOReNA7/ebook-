@@ -83,7 +83,7 @@ class ProgressTests(unittest.TestCase):
                 self.assertEqual(book['detail_source']['observed_at'],STAMP)
                 self.assertEqual(book['today_reading_source']['observed_at'],STAMP)
                 self.assertEqual(book['today_reading_count'],27)
-                self.assertTrue(Path(book['detail_source']['archive_path']).is_relative_to(target))
+                self.assertTrue(Path(book['detail_source']['archive_path']).resolve().is_relative_to(target.resolve()))
 
     def test_failed_reading_retries_only_reading_not_successful_details(self):
         with TemporaryDirectory() as d:

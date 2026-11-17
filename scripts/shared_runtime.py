@@ -408,7 +408,9 @@ def reviewed_fanqie_files(root, directory):
 
 
 def capture(root, day):
-    root = Path(root)
+    # safe_path resolves referenced evidence; use the same canonical root for
+    # all paths (including Windows short-name aliases) before relative_to.
+    root = Path(root).resolve()
     paths = {root/'config'/name for name in CONFIGS} | {root/'runs'/name for name in ROOT_STATES}
     # Business policy references are included; login and machine settings stay local.
     for name in ('tencent-runtime.json', 'service-scope.json', 'source-review-overrides.json'):

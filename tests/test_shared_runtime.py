@@ -43,6 +43,17 @@ class MemoryBase:
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_capture_normalizes_root_before_combining_referenced_evidence(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory);(root/'alias').mkdir()
+            evidence=root/'research/example.json';evidence.parent.mkdir()
+            evidence.write_text('{}',encoding='utf-8')
+            (root/'config').mkdir()
+            (root/'config/service-scope.json').write_text(
+                json.dumps({'evidence':'research/example.json'}),encoding='utf-8')
+            snapshot=capture(root/'alias'/'..','2026-11-13')
+            self.assertEqual(snapshot['files']['research/example.json']['text'],'{}')
+
     def test_reviewed_tencent_replacement_keeps_both_frozen_sources(self):
         with TemporaryDirectory() as directory:
             root=Path(directory);day=root/'runs/2026-11-13'
