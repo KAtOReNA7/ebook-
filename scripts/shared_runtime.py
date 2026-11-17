@@ -246,6 +246,18 @@ def assert_shared_writer(root):
     mutex.assert_owned()
 
 
+def chunk_conditions(prefix, count):
+    """Bound numbered manifests without reading an obsolete longer slot tail.
+
+    Every referenced five-digit key remains in the predicate. Old unused chunks
+    stay untouched; active chunk and reconstructed-content hashes still verify.
+    """
+    if type(count) is not int or not 1 <= count <= 100000:
+        raise ValueError('Invalid manifest chunk count')
+    digits=max(1,len(str(count-1)))
+    return [['状态键','intersects',prefix+'0'*(5-digits)]]
+
+
 class Store:
     def __init__(self, api):
         self.api = api
@@ -283,7 +295,7 @@ class Store:
         if meta is None:
             raise RuntimeError('No committed shared checkpoint; never use stale local defaults')
         prefix = 'slot'+str(meta['slot']) if 'slot' in meta else meta['generation']
-        rows = self.api.read(TABLE, [['状态键', 'intersects', prefix+':']])
+        rows = self.api.read(TABLE, chunk_conditions(prefix+':',meta['chunks']))
         index = {r['状态键']: r for r in rows}
         if len(index) != len(rows):
             raise RuntimeError('Duplicate shared-state keys')
@@ -327,7 +339,7 @@ class Store:
         parts = [encoded[i:i+24000] for i in range(0, len(encoded), 24000)]
         rows = [{'状态键': f'slot{slot}:{i:05}', '内容': text,
                  '校验值': digest(text.encode())} for i, text in enumerate(parts)]
-        self.api.ensure(TABLE, '状态键', rows, [['状态键','intersects',f'slot{slot}:']], update=True)
+        self.api.ensure(TABLE, '状态键', rows, chunk_conditions(f'slot{slot}:',len(parts)), update=True)
         meta = {'generation': generation, 'slot': slot, 'chunks': len(parts), 'sha256': digest(raw),
                 'saved_at': datetime.now(timezone.utc).isoformat()}
         if value.get('storage'):

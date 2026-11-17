@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.evidence_store import EvidenceStore, lease_cache, CACHE_ENV
-from scripts.shared_runtime import Store, SCHEMA, digest, LEASE_ENV, restore
+from scripts.shared_runtime import Store, SCHEMA, digest, LEASE_ENV, restore, chunk_conditions
 from scripts.stage_checkpoint import StageStore, delta, reconstruct
 from tests.test_shared_runtime import MemoryBase
 
@@ -28,6 +28,31 @@ class CountingBase(MemoryBase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_manifest_predicate_keeps_every_active_chunk_at_decimal_boundaries(self):
+        for count in (1,9,10,11,99,100,101,999,1000,1001,100000):
+            prefix=chunk_conditions('slot0:',count)[0][2]
+            self.assertTrue(all(f'slot0:{i:05}'.startswith(prefix) for i in range(count)))
+        for bad in (0,-1,100001,True,1.5):
+            with self.assertRaises(ValueError):chunk_conditions('slot0:',bad)
+
+    def test_obsolete_large_slot_tail_is_retained_without_being_read(self):
+        api=CountingBase();value=checkpoint({'runs/raw.json':'original'})
+        meta=Store(api).publish(value)
+        tail=f"slot{meta['slot']}:00786"
+        api.rows[tail]={'状态键':tail,'内容':'obsolete','校验值':digest(b'obsolete'),'record_id':tail}
+        journal=delta(value,value,meta['generation'],'lease','source','completed')
+        jm=StageStore(api).publish(journal)
+        jtail=f"stage:slot{jm['slot']}:00786"
+        api.rows[jtail]={'状态键':jtail,'内容':'obsolete','校验值':digest(b'obsolete'),'record_id':jtail}
+        api.reads=[]
+        self.assertEqual(Store(api).read()[0],value)
+        self.assertEqual(StageStore(api).read()[0],journal)
+        for conditions in api.reads:
+            if conditions and 'slot' in str(conditions):
+                self.assertFalse(tail.startswith(conditions[0][2]))
+                self.assertFalse(jtail.startswith(conditions[0][2]))
+        self.assertIn(tail,api.rows);self.assertIn(jtail,api.rows)
+
     def test_final_store_merges_child_archives_without_uploading_original_again(self):
         with TemporaryDirectory() as d,patch.dict(os.environ,{LEASE_ENV:'lease'},clear=True):
             os.environ[CACHE_ENV]=lease_cache(Path(d),'lease')

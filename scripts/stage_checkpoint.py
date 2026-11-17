@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 import uuid
 
-from scripts.shared_runtime import TABLE, LEASE_ENV, capture, digest, safe_path
+from scripts.shared_runtime import TABLE, LEASE_ENV, capture, digest, safe_path, chunk_conditions
 
 ENV = 'EBOOK_STAGE_CONTEXT'
 SCHEMA = 'ebook-stage-journal.v2'
@@ -50,7 +50,7 @@ class StageStore:
     def read(self, *, fresh=True):
         meta = self.head()
         if meta is None: return None, None
-        rows = self.api.read(TABLE, [['状态键','intersects',f"stage:slot{meta['slot']}:"]])
+        rows = self.api.read(TABLE, chunk_conditions(f"stage:slot{meta['slot']}:",meta['chunks']))
         index = {r['状态键']: r for r in rows}
         if len(index) != len(rows): raise StagePersistenceError('Duplicate stage journal keys')
         for i in range(meta['chunks']):
@@ -82,7 +82,7 @@ class StageStore:
         rows = [{'状态键':prefix+f'{i:05}', '内容':part, '校验值':digest(part.encode())} for i,part in enumerate(parts)]
         # Chunk writes are read back before moving the pointer. Unknown outcomes
         # retain the global lease; no business action is retried here.
-        self.api.ensure(TABLE, '状态键', rows, [['状态键','intersects',prefix]], update=True)
+        self.api.ensure(TABLE, '状态键', rows, chunk_conditions(prefix,len(parts)), update=True)
         meta = {'schema':value.get('schema'),'slot':slot,'chunks':len(parts),'sha256':digest(raw),'generation':uuid.uuid4().hex}
         if wire.get('storage'): meta['content_sha256'] = digest(logical)
         text = json.dumps(meta, sort_keys=True)
