@@ -87,8 +87,11 @@ def unknown_guard_paths(root):
                 if state.get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
                     unknown.append(str(path))
             except (ValueError,OSError):unknown.append(str(path))
+    export_cache = {}
     for path in sorted(candidates):
         if not path.exists():
+            continue
+        if verified_inspection_copy(root, path, export_cache):
             continue
         try:
             state = json.loads(path.read_text(encoding='utf-8-sig'))
@@ -98,6 +101,26 @@ def unknown_guard_paths(root):
         if not finished:
             unknown.append(str(path))
     return unknown
+
+
+def verified_inspection_copy(root, path, cache):
+    """Ignore only byte-verified read-only exports; never ignore active guards."""
+    try:
+        parts = path.relative_to(root / 'receipts').parts
+        if len(parts) < 5 or not parts[1].startswith('stage-recovery-') or parts[2] != 'evidence':
+            return False
+        export = root / 'receipts' / parts[0] / parts[1]
+        if export not in cache:
+            result = json.loads((export / 'result.json').read_text(encoding='utf-8'))
+            valid = (result.get('read_only') is True and result.get('business_writes') == 0
+                     and result.get('messages_created') == 0
+                     and result.get('evidence_directory') == str(export / 'evidence'))
+            cache[export] = (json.loads((export / 'reconstructed-checkpoint.json').read_text(
+                encoding='utf-8'))['files'] if valid else {})
+        entry = cache[export].get('/'.join(parts[3:]))
+        return isinstance(entry, dict) and path.read_bytes() == entry['text'].encode('utf-8')
+    except (ValueError, OSError, KeyError, TypeError):
+        return False
 
 
 def has_unknown_guard(root):

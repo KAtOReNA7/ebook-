@@ -35,6 +35,31 @@ def write_source(root, day, baseline=False, events=None, dry=False):
 
 
 class ManualInitializationTests(unittest.TestCase):
+    def test_verified_inspection_export_is_not_active_but_real_guard_still_blocks(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            name = 'runs/2026-11-17/source.apply-state.json'
+            export = root / 'receipts/2026-11-17/stage-recovery-test'
+            copy = export / 'evidence' / name
+            copy.parent.mkdir(parents=True)
+            body = json.dumps({'phase': 'apply_in_progress'})
+            copy.write_text(body, encoding='utf-8')
+            # An arbitrary directory named evidence never exempts a guard.
+            self.assertEqual(init.unknown_guard_paths(root), [str(copy)])
+            (export / 'result.json').write_text(json.dumps({'read_only': True,
+                'business_writes': 0, 'messages_created': 0,
+                'evidence_directory': str(export / 'evidence')}), encoding='utf-8')
+            (export / 'reconstructed-checkpoint.json').write_text(json.dumps(
+                {'files': {name: {'text': body}}}), encoding='utf-8')
+            self.assertEqual(init.unknown_guard_paths(root), [])
+            active = root / name
+            active.parent.mkdir(parents=True)
+            active.write_text(body, encoding='utf-8')
+            self.assertEqual(init.unknown_guard_paths(root), [str(active)])
+            active.write_text(json.dumps({'phase': 'finished'}), encoding='utf-8')
+            copy.write_text(body + ' ', encoding='utf-8')
+            self.assertEqual(init.unknown_guard_paths(root), [str(copy)])
+
     def test_unconfirmed_or_audio_medium_is_never_inferred_as_ebook(self):
         rows = [manual('blank', 作品形式=None), manual('audio', 作品形式='有声书')]
         before = deepcopy(rows)
