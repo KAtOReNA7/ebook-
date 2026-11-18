@@ -1,6 +1,9 @@
 """Initialize explicit marketing rows without inventing platform identities."""
 from datetime import date, timedelta
+import hashlib
 import json
+import os
+from pathlib import Path
 
 try:
     from .daily_run import Base, ROOT, atomic_json, now, options, shanghai_day
@@ -67,16 +70,43 @@ def build_plan(projects, day):
             'record_ids': sorted(p['record_id'] for p in projects)}
 
 
+_GUARD_NAMES = {'legacy-migration-state.json', 'legacy-rollback-state.json',
+                'link-state.json', 'alias-merge-state.json', 'publisher-recent-state.json',
+                'fanqie-rising-state.json'}
+
+
+def _guard_name(name):
+    name = os.path.normcase(name)
+    return name in _GUARD_NAMES or name.endswith('.apply-state.json')
+
+
+def _nested_guards(directory):
+    """Visit each directory once, matching all guard types, including in old runs."""
+    pending = [directory]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = os.scandir(current)
+        except FileNotFoundError:
+            if current == directory and not os.path.lexists(directory):
+                continue  # A new checkout may not have a receipts or runs directory.
+            raise
+        with entries:
+            for entry in entries:
+                if _guard_name(entry.name):
+                    yield Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+
+
 def unknown_guard_paths(root):
-    candidates = {root / 'runs' / name for name in ('manual-project-init-state.json',
-                  'manual-project-events-state.json','marketing-expense-notification-state.json')}
+    direct = (root / 'runs' / name for name in ('manual-project-init-state.json',
+              'manual-project-events-state.json', 'marketing-expense-notification-state.json'))
+    candidates = {path for path in direct if os.path.lexists(path)}
     # Manual initialization precedes all other modules, so it must respect
     # identity migrations/imports interrupted outside the daily coordinator.
     for directory in (root / 'receipts', root / 'runs'):
-        for pattern in ('**/legacy-migration-state.json', '**/legacy-rollback-state.json', '**/link-state.json',
-                        '**/alias-merge-state.json', '**/*.apply-state.json', '**/publisher-recent-state.json',
-                        '**/fanqie-rising-state.json'):
-            candidates.update(directory.glob(pattern))
+        candidates.update(_nested_guards(directory))
     unknown = []
     # These source guards use reconciled as an explicit audited resume state.
     # They were previously omitted by the shared report gate.
@@ -84,23 +114,47 @@ def unknown_guard_paths(root):
         for path in (root/'runs').glob('*/'+name):
             try:
                 state=json.loads(path.read_text(encoding='utf-8-sig'))
-                if state.get('phase') in {'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
+                if not isinstance(state, dict) or state.get('phase') in {
+                        'sync_in_progress','apply_in_progress','events_in_progress','requires_review'}:
                     unknown.append(str(path))
             except (ValueError,OSError):unknown.append(str(path))
     export_cache = {}
     for path in sorted(candidates):
-        if not path.exists():
-            continue
-        if verified_inspection_copy(root, path, export_cache):
-            continue
         try:
             state = json.loads(path.read_text(encoding='utf-8-sig'))
             finished = isinstance(state, dict) and state.get('phase') == 'finished'
         except (ValueError, OSError):
             finished = False
-        if not finished:
+        if not finished and not verified_inspection_copy(root, path, export_cache):
             unknown.append(str(path))
     return unknown
+
+
+_recent_export_guards = {}
+
+
+def _export_guard_bytes(manifest):
+    # Rehash the whole export on every inspection. Only exact guard bytes from
+    # the same content can be reused; never trust a file's timestamp or length.
+    with manifest.open('rb') as stream:
+        checksum = hashlib.file_digest(stream, 'sha256').digest()
+        if checksum in _recent_export_guards:
+            return _recent_export_guards[checksum]
+        stream.seek(0)
+        raw = stream.read()
+    if hashlib.sha256(raw).digest() != checksum:
+        return {}  # The export changed between hashing and parsing.
+    files = json.loads(raw.decode('utf-8'))['files']
+    if not isinstance(files, dict):
+        return {}
+    guards = {name: entry['text'].encode('utf-8') for name, entry in files.items()
+              if _guard_name(name.rsplit('/', 1)[-1]) and isinstance(entry, dict)
+              and isinstance(entry.get('text'), str)}
+    if sum(map(len, guards.values())) <= 2 * 1024 * 1024:
+        if len(_recent_export_guards) >= 4:
+            del _recent_export_guards[next(iter(_recent_export_guards))]
+        _recent_export_guards[checksum] = guards
+    return guards
 
 
 def verified_inspection_copy(root, path, cache):
@@ -115,10 +169,9 @@ def verified_inspection_copy(root, path, cache):
             valid = (result.get('read_only') is True and result.get('business_writes') == 0
                      and result.get('messages_created') == 0
                      and result.get('evidence_directory') == str(export / 'evidence'))
-            cache[export] = (json.loads((export / 'reconstructed-checkpoint.json').read_text(
-                encoding='utf-8'))['files'] if valid else {})
+            cache[export] = _export_guard_bytes(export / 'reconstructed-checkpoint.json') if valid else {}
         entry = cache[export].get('/'.join(parts[3:]))
-        return isinstance(entry, dict) and path.read_bytes() == entry['text'].encode('utf-8')
+        return entry is not None and path.read_bytes() == entry
     except (ValueError, OSError, KeyError, TypeError):
         return False
 

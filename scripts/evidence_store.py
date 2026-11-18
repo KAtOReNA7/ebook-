@@ -63,8 +63,10 @@ class EvidenceStore:
             raise ValueError('Invalid evidence pack reference')
         cache = self.folder/(digest+'.json') if self.folder else None
         raw = self.packs.get(digest)
+        read_from_disk = False
         if raw is None and not fresh and cache and cache.is_file():
             raw = cache.read_bytes()
+            read_from_disk = True
         if fresh or raw is None:
             prefix = 'cas:'+digest+':'
             rows = self.api.read(TABLE, [['状态键', 'intersects', prefix]])
@@ -85,8 +87,15 @@ class EvidenceStore:
         if not isinstance(values, dict) or any(sha(text.encode()) != key for key, text in values.items()):
             raise ValueError('Evidence file checksum mismatch')
         self.packs[digest] = raw
-        if cache:
-            cache.write_bytes(raw)
+        if cache and not read_from_disk:
+            # A fresh read still verifies every remote chunk and every file.
+            # Avoid rewriting an identical local pack on every stage readback.
+            try:
+                unchanged = cache.read_bytes() == raw
+            except FileNotFoundError:
+                unchanged = False
+            if not unchanged:
+                cache.write_bytes(raw)
         return values
 
     def put_pack(self, values):

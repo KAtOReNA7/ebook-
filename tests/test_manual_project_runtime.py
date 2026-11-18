@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -35,6 +36,29 @@ def write_source(root, day, baseline=False, events=None, dry=False):
 
 
 class ManualInitializationTests(unittest.TestCase):
+    def test_one_directory_walk_finds_all_guard_types_and_rescans_after_a_change(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root/'receipts'/'.hidden'/'old'
+            folder.mkdir(parents=True)
+            names = ('legacy-migration-state.json', 'legacy-rollback-state.json', 'link-state.json',
+                     'alias-merge-state.json', 'publisher-recent-state.json', 'fanqie-rising-state.json',
+                     'repair.apply-state.json')
+            for name in names:
+                (folder/name).write_text('invalid')
+            with patch.object(init.os, 'scandir', wraps=init.os.scandir) as scans:
+                self.assertEqual(set(init.unknown_guard_paths(root)), {str(folder/n) for n in names})
+                self.assertEqual(sum(Path(c.args[0]) == folder for c in scans.call_args_list), 1)
+            (folder/names[0]).write_text('{"phase":"finished"}')
+            day = root/'runs'/'old'
+            day.mkdir(parents=True)
+            (day/'daily-state.json').write_text('[]')
+            self.assertEqual(set(init.unknown_guard_paths(root)),
+                             {str(folder/n) for n in names[1:]} | {str(day/'daily-state.json')})
+            with patch.object(init.os, 'scandir', side_effect=PermissionError('unreadable')):
+                with self.assertRaises(PermissionError):
+                    init.unknown_guard_paths(root)
+
     def test_verified_inspection_export_is_not_active_but_real_guard_still_blocks(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -52,6 +76,15 @@ class ManualInitializationTests(unittest.TestCase):
             (export / 'reconstructed-checkpoint.json').write_text(json.dumps(
                 {'files': {name: {'text': body}}}), encoding='utf-8')
             self.assertEqual(init.unknown_guard_paths(root), [])
+            manifest = export / 'reconstructed-checkpoint.json'
+            original = manifest.read_bytes()
+            stamp = manifest.stat()
+            changed = original.replace(b'apply_in_progress', b'other_in_progress')
+            self.assertEqual(len(changed), len(original))
+            manifest.write_bytes(changed)
+            os.utime(manifest, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertEqual(init.unknown_guard_paths(root), [str(copy)])
+            manifest.write_bytes(original)
             active = root / name
             active.parent.mkdir(parents=True)
             active.write_text(body, encoding='utf-8')

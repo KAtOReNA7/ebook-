@@ -28,6 +28,26 @@ class CountingBase(MemoryBase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_cached_pack_skips_identical_disk_writes_and_fresh_read_checks_remote(self):
+        with TemporaryDirectory() as d, patch.dict(os.environ, {LEASE_ENV:'lease'}, clear=True):
+            os.environ[CACHE_ENV] = lease_cache(d, 'lease')
+            api = CountingBase()
+            store = EvidenceStore(api)
+            values = {digest(b'original'):'original'}
+            ref = store.put_pack(values)
+            cache = Path(os.environ[CACHE_ENV]) / (ref['pack']+'.json')
+            with patch.object(Path, 'write_bytes', side_effect=AssertionError('redundant pack write')):
+                self.assertEqual(EvidenceStore(api).pack_raw(ref, fresh=False), values)
+                self.assertEqual(store.pack_raw(ref, fresh=True), values)
+            cache.write_bytes(b'corrupt')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                EvidenceStore(api).pack_raw(ref, fresh=False)
+            self.assertEqual(store.pack_raw(ref, fresh=True), values)
+            self.assertEqual(digest(cache.read_bytes()), ref['pack'])
+            api.rows.clear()
+            with self.assertRaisesRegex(ValueError, 'Missing'):
+                store.pack_raw(ref, fresh=True)
+
     def test_manifest_predicate_keeps_every_active_chunk_at_decimal_boundaries(self):
         for count in (1,9,10,11,99,100,101,999,1000,1001,100000):
             prefix=chunk_conditions('slot0:',count)[0][2]

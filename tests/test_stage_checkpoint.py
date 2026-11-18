@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.shared_runtime import capture,restore,digest,LEASE_ENV
+from scripts.stage_checkpoint import indexed_delta, stage_baseline
 from scripts.stage_checkpoint import StageStore,StagePersistenceError,delta,reconstruct,run_stage,before_mutation,start,ENV,context,require_settled
 
 
@@ -31,6 +32,40 @@ class StageCheckpointTests(unittest.TestCase):
         directory=root/'runs'/day;directory.mkdir(parents=True,exist_ok=True)
         (directory/'weread.json').write_text(json.dumps({'actual_time':value,'books':[{'book_id':'123'}]}))
         return directory
+
+    def test_small_local_index_produces_identical_journal_and_rejects_mixed_inputs(self):
+        def entry(text, **meta):
+            return {'text': text, 'sha256': digest(text.encode()), **meta}
+        with TemporaryDirectory() as d, patch.dict(os.environ, {LEASE_ENV: 'lease'}, clear=True):
+            root = Path(d)
+            base = {'day':'2026-11-18', 'files':{'runs/a.json': entry('原文\r\n' * 5000),
+                    'runs/b.json': entry('old'), 'runs/c.json': entry('same', source='a'),
+                    'runs/removed.json': entry('gone')}}
+            current = copy.deepcopy(base)
+            del current['files']['runs/removed.json']
+            current['files'].update({'runs/b.json':entry('new'), 'runs/c.json':entry('same', source='b'),
+                                     'runs/new.json':entry('new')})
+            start(root, base, {'generation':'parent'}, 'lease')
+            path, ctx = context(root)
+            folder = path.parent
+            self.assertFalse((folder/'baseline.json').exists())
+            self.assertLess((folder/'baseline-index.json').stat().st_size, 2000)
+            signatures = stage_baseline(folder, ctx)
+            journal = indexed_delta(signatures, current, 'parent', 'lease', 'source', 'before_write')
+            self.assertEqual(journal, delta(base, current, 'parent', 'lease', 'source', 'before_write'))
+            self.assertEqual(reconstruct(root, base, 'parent', journal), current)
+            with self.assertRaises(StagePersistenceError):
+                stage_baseline(folder, {**ctx, 'parent_generation':'changed'})
+            with self.assertRaises(StagePersistenceError):
+                stage_baseline(folder, {**ctx, 'lease_sha256':'changed'})
+            (folder/'baseline.json').write_text(json.dumps(base), encoding='utf-8')
+            self.assertEqual(stage_baseline(folder, {}), signatures)
+            (folder/'baseline-index.json').write_text('{}', encoding='utf-8')
+            with self.assertRaises(StagePersistenceError):
+                stage_baseline(folder, ctx)
+            current['files']['runs/b.json']['text'] = 'xew'
+            with self.assertRaises(StagePersistenceError):
+                indexed_delta(signatures, current, 'parent', 'lease', 'source', 'before_write')
 
     def test_crash_before_write_restores_frozen_source_and_guard_on_other_machine(self):
         with TemporaryDirectory() as a,TemporaryDirectory() as b:

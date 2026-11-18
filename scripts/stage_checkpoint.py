@@ -93,12 +93,47 @@ class StageStore:
         return meta
 
 
-def delta(base, current, parent, lease, stage, phase):
+def file_signatures(files):
+    """Bind the complete original UTF-8 bytes and all other entry metadata."""
+    signatures = {}
+    for name, entry in files.items():
+        if digest(entry['text'].encode('utf-8')) != entry['sha256']:
+            raise StagePersistenceError('Stage input file checksum differs: ' + name)
+        signatures[name] = {key: value for key, value in entry.items() if key != 'text'}
+    return signatures
+
+
+def _journal(changed, removed, current, parent, lease, stage, phase):
     return {'schema':SCHEMA, 'parent_generation':parent, 'lease_sha256':digest(lease.encode()),
             'stage':stage, 'phase':phase,
             'checkpoint_meta':{k:v for k,v in current.items() if k!='files'},
-            'files':{k:v for k,v in current['files'].items() if base['files'].get(k)!=v},
-            'removed':sorted(set(base['files'])-set(current['files']))}
+            'files':changed, 'removed':sorted(removed)}
+
+
+def delta(base, current, parent, lease, stage, phase):
+    changed = {k:v for k,v in current['files'].items() if base['files'].get(k)!=v}
+    return _journal(changed, base['files'].keys()-current['files'].keys(), current, parent, lease, stage, phase)
+
+
+def indexed_delta(signatures, current, parent, lease, stage, phase):
+    observed = file_signatures(current['files'])
+    changed = {k:current['files'][k] for k,v in observed.items() if signatures.get(k)!=v}
+    return _journal(changed, signatures.keys()-observed.keys(), current, parent, lease, stage, phase)
+
+
+def index_digest(index):
+    return digest(json.dumps(index, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode())
+
+
+def stage_baseline(folder, ctx):
+    if 'baseline_index_sha256' not in ctx:
+        return file_signatures(load(folder/'baseline.json')['files'])  # Pre-index local context.
+    index = load(folder/'baseline-index.json')
+    if index_digest(index) != ctx['baseline_index_sha256']:
+        raise StagePersistenceError('Local stage baseline index checksum differs')
+    if (index['parent_generation'], index['lease_sha256']) != (ctx['parent_generation'], ctx['lease_sha256']):
+        raise StagePersistenceError('Local stage baseline belongs to another checkpoint or lease')
+    return index['files']
 
 
 def reconstruct(root, base, parent, journal):
@@ -126,10 +161,13 @@ def require_settled(root, checkpoint, generation, journal):
 def start(root, base, meta, lease, resume_progress=None, restored_checkpoint=None):
     folder = Path(root)/'runs'/('.stage-'+uuid.uuid4().hex)
     folder.mkdir(parents=True)
-    write(folder/'baseline.json',base)
     context = {'root':str(Path(root).resolve()),'parent_generation':meta['generation'],
                'lease_sha256':digest(lease.encode()),'day':base['day'],
                'stage':'initializing','before_saved':False,'failed':False,'saves':0}
+    index = {'parent_generation':meta['generation'], 'lease_sha256':context['lease_sha256'],
+             'files':file_signatures(base['files'])}
+    context['baseline_index_sha256'] = index_digest(index)
+    write(folder/'baseline-index.json', index)
     # Day belongs to this execution, not yesterday's restored baseline.
     from scripts.daily_run import shanghai_day
     context['day']=shanghai_day()
@@ -178,8 +216,8 @@ def _persist(root, phase):
             ctx['last_save']={'phase':phase,'skipped_unchanged':True,'seconds':time.monotonic()-started}
             write(path,ctx)
             return
-        value=delta(load(path.with_name('baseline.json')),current,ctx['parent_generation'],
-                    os.environ[LEASE_ENV],ctx['stage'],phase)
+        value=indexed_delta(stage_baseline(path.parent, ctx),current,ctx['parent_generation'],
+                            os.environ[LEASE_ENV],ctx['stage'],phase)
         api=Base(Path(root)/'receipts'/ctx['day']/('stage-'+uuid.uuid4().hex))
         Store(api).discover()  # Existing private system table only.
         store = StageStore(api)
