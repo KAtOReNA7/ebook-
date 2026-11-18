@@ -25,6 +25,8 @@ import urllib.error
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.run_performance import span, timed
+
 TABLE = '系统运行状态'
 SCHEMA = 'ebook-shared-checkpoint.v9'
 BRANCH = 'codex/runtime-coordination'
@@ -261,13 +263,14 @@ def chunk_conditions(prefix, count):
 class Store:
     def __init__(self, api):
         self.api = api
-        from scripts.evidence_store import EvidenceStore
+        from scripts.evidence_store import EvidenceStore, PACK_PAGE_SIZE
         self.evidence = EvidenceStore(api)
         # Text-heavy checkpoint rows need a byte-bounded batch, well below the
         # normal 200-record API maximum (20 * 24 KB per request).
         self.api.write_batch_size = 20
-        self.api.read_page_size = 100
+        self.api.read_page_size = PACK_PAGE_SIZE
 
+    @timed('state_table_discovery', nested=True)
     def discover(self):
         rows = self.api.call('+table-list')['data']['tables']
         tables = [r for r in rows if r['name'] == TABLE]
@@ -290,6 +293,7 @@ class Store:
             raise RuntimeError('Shared HEAD checksum mismatch')
         return json.loads(head['内容'])
 
+    @timed('checkpoint_read', nested=True)
     def read(self, *, fresh=True):
         meta = self.head()
         if meta is None:
@@ -319,6 +323,7 @@ class Store:
                 raise RuntimeError('Shared HEAD changed during evidence read')
         return data, meta
 
+    @timed('checkpoint_publish', nested=True)
     def publish(self, checkpoint):
         supported = {'ebook-shared-checkpoint.v'+str(n) for n in range(1, int(SCHEMA.rsplit('v',1)[1])+1)}
         if checkpoint.get('schema') not in supported:
@@ -339,15 +344,17 @@ class Store:
         parts = [encoded[i:i+24000] for i in range(0, len(encoded), 24000)]
         rows = [{'状态键': f'slot{slot}:{i:05}', '内容': text,
                  '校验值': digest(text.encode())} for i, text in enumerate(parts)]
-        self.api.ensure(TABLE, '状态键', rows, chunk_conditions(f'slot{slot}:',len(parts)), update=True)
+        with span('checkpoint_chunk_write_readback', nested=True):
+            self.api.ensure(TABLE, '状态键', rows, chunk_conditions(f'slot{slot}:',len(parts)), update=True)
         meta = {'generation': generation, 'slot': slot, 'chunks': len(parts), 'sha256': digest(raw),
                 'saved_at': datetime.now(timezone.utc).isoformat()}
         if value.get('storage'):
             meta.update(storage=value['storage'], content_sha256=digest(logical))
         text = json.dumps(meta, sort_keys=True)
         # Commit the pointer only after every immutable chunk has passed readback.
-        self.api.ensure(TABLE, '状态键', [{'状态键': 'HEAD', '内容': text,
-                        '校验值': digest(text.encode())}], [['状态键','==','HEAD']], update=True)
+        with span('checkpoint_head_write_readback', nested=True):
+            self.api.ensure(TABLE, '状态键', [{'状态键': 'HEAD', '内容': text,
+                            '校验值': digest(text.encode())}], [['状态键','==','HEAD']], update=True)
         verified, result = self.read()
         if verified != checkpoint or result != meta:
             raise RuntimeError('Checkpoint readback mismatch; keep lock for reconciliation')
@@ -407,6 +414,7 @@ def reviewed_fanqie_files(root, directory):
     return paths
 
 
+@timed('checkpoint_capture', nested=True)
 def capture(root, day):
     # safe_path resolves referenced evidence; use the same canonical root for
     # all paths (including Windows short-name aliases) before relative_to.
@@ -474,20 +482,22 @@ def capture(root, day):
             for folder in directory.glob(pattern):
                 paths.update(folder.rglob('*.json'))
     files = {}
-    for path in sorted(paths):
-        if not path.is_file(): continue
-        name = path.relative_to(root).as_posix()
-        safe_path(root, name)
-        # Preserve raw response bytes exactly: source receipts verify their SHA.
-        raw = path.read_bytes()
-        files[name] = {'text': raw.decode('utf-8'), 'sha256': digest(raw)}
+    with span('capture_frozen_files', nested=True):
+        for path in sorted(paths):
+            if not path.is_file(): continue
+            name = path.relative_to(root).as_posix()
+            safe_path(root, name)
+            # Preserve raw response bytes exactly: source receipts verify their SHA.
+            raw = path.read_bytes()
+            files[name] = {'text': raw.decode('utf-8'), 'sha256': digest(raw)}
     if publisher_business is not None:
         raw=json.dumps(publisher_business,ensure_ascii=False,sort_keys=True).encode('utf-8')
         files['config/publisher-business.json']={'text':raw.decode('utf-8'),'sha256':digest(raw)}
     origin = root/'config/workspace-origin.json'
     origins = sorted(set([str(root.resolve()), *(load(origin).get('roots', []) if origin.exists() else [])]))
     from scripts.initialize_manual_projects import unknown_guard_paths
-    unresolved = unknown_guard_paths(root)
+    with span('capture_guard_scan', nested=True):
+        unresolved = unknown_guard_paths(root)
     for name in ('manual-project-events-state.json','marketing-expense-notification-state.json'):
         path = root/'runs'/name
         if path.exists() and load(path).get('phase') != 'finished':

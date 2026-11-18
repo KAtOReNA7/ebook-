@@ -26,27 +26,30 @@ def event(kind, started, **values):
 
 
 @contextmanager
-def span(name):
+def span(name, *, nested=False):
     old = os.environ.get(STAGE_ENV)
-    os.environ[STAGE_ENV] = name
+    stage = f'{old}/{name}' if nested and old else name
+    os.environ[STAGE_ENV] = stage
     started = time.monotonic()
     outcome = 'failed'
     try:
         yield
         outcome = 'completed'
     finally:
-        event('span', started, name=name, outcome=outcome, parent_stage=old)
-        if old is None:
-            os.environ.pop(STAGE_ENV, None)
-        else:
-            os.environ[STAGE_ENV] = old
+        try:
+            event('span', started, name=name, outcome=outcome, parent_stage=old)
+        finally:
+            if old is None:
+                os.environ.pop(STAGE_ENV, None)
+            else:
+                os.environ[STAGE_ENV] = old
 
 
-def timed(name):
+def timed(name, *, nested=False):
     def decorate(function):
         @wraps(function)
         def wrapped(*args, **kwargs):
-            with span(name):
+            with span(name, nested=nested):
                 return function(*args, **kwargs)
         return wrapped
     return decorate

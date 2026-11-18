@@ -12,10 +12,14 @@ import os
 from pathlib import Path
 import re
 
+from scripts.run_performance import span, timed
+
 FORMAT = 'ebook-content-manifest.v1'
 CACHE_ENV = 'EBOOK_EVIDENCE_CACHE'
 PACK_BYTES = 4 * 1024 * 1024
 TABLE = '系统运行状态'
+MAX_PACK_FILTERS = 8
+PACK_PAGE_SIZE = 100
 
 
 def sha(raw):
@@ -24,6 +28,27 @@ def sha(raw):
 
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+
+
+def pack_identity(ref):
+    checksum, count = ref['pack'], ref['chunks']
+    if not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum) or (
+            type(count) is not int or not 1 <= count <= 100000):
+        raise ValueError('Invalid evidence pack reference')
+    return checksum, count
+
+
+def pack_groups(counts):
+    """Combine small packs in at most one page, with an isolated query for a large pack."""
+    group, chunks = {}, 0
+    for checksum, count in counts.items():
+        if group and (len(group) == MAX_PACK_FILTERS or chunks + count > PACK_PAGE_SIZE):
+            yield group
+            group, chunks = {}, 0
+        group[checksum] = count
+        chunks += count
+    if group:
+        yield group
 
 
 class EvidenceStore:
@@ -57,39 +82,17 @@ class EvidenceStore:
         versions = self.versions.setdefault(name, {})
         versions[ref['sha256']] = dict(ref)
 
-    def pack_raw(self, ref, *, fresh):
-        digest, count = ref['pack'], ref['chunks']
-        if not re.fullmatch('[0-9a-f]{64}', digest) or type(count) is not int or count < 1:
-            raise ValueError('Invalid evidence pack reference')
-        cache = self.folder/(digest+'.json') if self.folder else None
-        raw = self.packs.get(digest)
-        read_from_disk = False
-        if raw is None and not fresh and cache and cache.is_file():
-            raw = cache.read_bytes()
-            read_from_disk = True
-        if fresh or raw is None:
-            prefix = 'cas:'+digest+':'
-            rows = self.api.read(TABLE, [['状态键', 'intersects', prefix]])
-            index = {r['状态键']: r for r in rows}
-            expected = {prefix+f'{i:05}' for i in range(count)}
-            if len(index) != len(rows) or set(index) != expected:
-                raise ValueError('Missing, duplicate or unexpected immutable evidence chunk')
-            parts = []
-            for key in sorted(expected):
-                row = index[key]
-                if sha(row['内容'].encode()) != row['校验值']:
-                    raise ValueError('Evidence chunk checksum mismatch')
-                parts.append(row['内容'])
-            raw = gzip.decompress(base64.b64decode(''.join(parts), validate=True))
-        if sha(raw) != digest:
+    def _verified_values(self, checksum, raw, *, read_from_disk=False):
+        if sha(raw) != checksum:
             raise ValueError('Evidence pack checksum mismatch')
         values = json.loads(raw)
         if not isinstance(values, dict) or any(sha(text.encode()) != key for key, text in values.items()):
             raise ValueError('Evidence file checksum mismatch')
-        self.packs[digest] = raw
-        if cache and not read_from_disk:
+        self.packs[checksum] = raw
+        if self.folder and not read_from_disk:
             # A fresh read still verifies every remote chunk and every file.
             # Avoid rewriting an identical local pack on every stage readback.
+            cache = self.folder/(checksum+'.json')
             try:
                 unchanged = cache.read_bytes() == raw
             except FileNotFoundError:
@@ -98,26 +101,73 @@ class EvidenceStore:
                 cache.write_bytes(raw)
         return values
 
+    def _verify_remote_pack(self, checksum, count, rows):
+        prefix = 'cas:'+checksum+':'
+        index = {row['状态键']: row for row in rows}
+        expected = [prefix+f'{i:05}' for i in range(count)]
+        if len(index) != len(rows) or index.keys() != set(expected):
+            raise ValueError('Missing, duplicate or unexpected immutable evidence chunk')
+        parts = []
+        for key in expected:
+            row = index[key]
+            if sha(row['内容'].encode()) != row['校验值']:
+                raise ValueError('Evidence chunk checksum mismatch')
+            parts.append(row['内容'])
+        raw = gzip.decompress(base64.b64decode(''.join(parts), validate=True))
+        return self._verified_values(checksum, raw)
+
+    def pack_raw(self, ref, *, fresh):
+        checksum, count = pack_identity(ref)
+        if not fresh:
+            if checksum in self.packs:
+                return self._verified_values(checksum, self.packs[checksum])
+            cache = self.folder/(checksum+'.json') if self.folder else None
+            if cache and cache.is_file():
+                return self._verified_values(checksum, cache.read_bytes(), read_from_disk=True)
+        with span('evidence_chunk_read', nested=True):
+            rows = self.api.read(TABLE, [['状态键', 'intersects', 'cas:'+checksum+':']])
+        with span('evidence_chunk_verification', nested=True):
+            return self._verify_remote_pack(checksum, count, rows)
+
+    def _read_packs(self, counts):
+        verified = {}
+        for group in pack_groups(counts):
+            conditions = [['状态键', 'intersects', 'cas:'+checksum+':'] for checksum in group]
+            with span('evidence_chunk_read', nested=True):
+                rows = self.api.read(TABLE, conditions, filter_logic='or' if len(group) > 1 else 'and')
+            with span('evidence_chunk_verification', nested=True):
+                by_pack = {checksum: [] for checksum in group}
+                for row in rows:
+                    key = row.get('状态键')
+                    parts = key.split(':', 2) if isinstance(key, str) else []
+                    if len(parts) != 3 or parts[0] != 'cas' or parts[1] not in by_pack:
+                        raise ValueError('Unexpected row in immutable evidence query')
+                    by_pack[parts[1]].append(row)
+                for checksum, count in group.items():
+                    verified[checksum] = self._verify_remote_pack(checksum, count, by_pack[checksum])
+        return verified
+
+    @timed('evidence_pack_publish', nested=True)
     def put_pack(self, values):
-        raw = encoded(values)
-        digest = sha(raw)
-        body = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
-        parts = [body[i:i+24000] for i in range(0, len(body), 24000)]
-        prefix = 'cas:'+digest+':'
-        ref = {'pack': digest, 'chunks': len(parts)}
-        existing = self.api.read(TABLE, [['状态键', 'intersects', prefix]])
-        if existing:
-            # An incomplete/corrupt prior write is never repaired by blind overwrite.
-            if self.pack_raw(ref, fresh=True) != values:
-                raise ValueError('Existing evidence differs')
-            return ref
-        rows = [{'状态键': prefix+f'{i:05}', '内容': part, '校验值': sha(part.encode())}
-                for i, part in enumerate(parts)]
-        self.api.ensure(TABLE, '状态键', rows, [['状态键', 'intersects', prefix]], update=False)
-        if self.pack_raw(ref, fresh=True) != values:
-            raise ValueError('New evidence failed independent readback')
+        with span('evidence_pack_encode', nested=True):
+            raw = encoded(values)
+            checksum = sha(raw)
+            body = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
+            parts = [body[i:i+24000] for i in range(0, len(body), 24000)]
+            prefix = 'cas:'+checksum+':'
+            ref = {'pack': checksum, 'chunks': len(parts)}
+            rows = [{'状态键': prefix+f'{i:05}', '内容': part, '校验值': sha(part.encode())}
+                    for i, part in enumerate(parts)]
+        # ensure returns remote rows, including an independent read after any
+        # create. A partial existing pack fails before dispatching any writes.
+        with span('evidence_pack_ensure', nested=True):
+            observed = self.api.ensure(TABLE, '状态键', rows, [['状态键', 'intersects', prefix]], immutable=True)
+        with span('evidence_chunk_verification', nested=True):
+            if self._verify_remote_pack(checksum, len(parts), list(observed.values())) != values:
+                raise ValueError('Evidence pack differs on independent readback')
         return ref
 
+    @timed('evidence_freeze', nested=True)
     def freeze(self, value):
         """Store only unseen content; retain old versions as archive references."""
         # Child stages share this lease, while the final Store instance predates
@@ -165,6 +215,7 @@ class EvidenceStore:
                 'value': {k:v for k,v in value.items() if k != 'files'},
                 'files': refs, 'archive': archive}
 
+    @timed('evidence_thaw', nested=True)
     def thaw(self, manifest, *, fresh=True):
         if manifest.get('storage') != FORMAT:
             raise ValueError('Unknown evidence format')
@@ -172,15 +223,16 @@ class EvidenceStore:
             raise ValueError('Manifest and logical schema differ')
         all_refs = [(name, ref) for name, ref in manifest['files'].items()]
         all_refs += [(name, ref) for name, refs in manifest.get('archive', {}).items() for ref in refs]
-        verified, counts = {}, {}
-        for name, ref in all_refs:
-            if ref['pack'] in counts and counts[ref['pack']] != ref['chunks']:
+        counts = {}
+        for _, ref in all_refs:
+            checksum, count = pack_identity(ref)
+            if counts.setdefault(checksum, count) != count:
                 raise ValueError('Conflicting evidence pack chunk counts')
-            counts[ref['pack']] = ref['chunks']
-            if ref['pack'] not in verified:
-                verified[ref['pack']] = self.pack_raw(ref, fresh=fresh)
-            text = verified[ref['pack']].get(ref['sha256'])
-            if text is None or sha(text.encode()) != ref['sha256']:
+        verified = self._read_packs(counts) if fresh else {
+            checksum: self.pack_raw({'pack':checksum, 'chunks':count}, fresh=False)
+            for checksum, count in counts.items()}
+        for name, ref in all_refs:
+            if ref['sha256'] not in verified[ref['pack']]:
                 raise ValueError('Referenced evidence file is missing or corrupt')
             self.remember(name, ref)
         result = {**manifest['value'], 'files': {

@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -11,7 +12,7 @@ from unittest.mock import Mock, patch
 import urllib.error
 
 from scripts.feishu_io import Base
-from scripts.run_performance import summarize
+from scripts.run_performance import ENV as PERFORMANCE_DIR, STAGE_ENV, event, span, summarize
 from scripts.sampling_reuse import eligible_snapshot, verified_copy
 from scripts.shared_runtime import LEASE_ENV, digest, gh
 from scripts.stage_checkpoint import start, run_stage, context, before_mutation
@@ -180,3 +181,15 @@ class OptimizationTests(unittest.TestCase):
         self.assertEqual(result['stages']['a']['coordination_http_calls'],1)
         self.assertEqual(result['stages']['a']['read_retries'],1)
         self.assertEqual(result['stages']['a']['business_status'],'requires_review')
+
+    def test_nested_component_counts_remain_attributed_to_their_parent(self):
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {PERFORMANCE_DIR:directory}, clear=True):
+            for phase, calls in [('shared_restore', 1), ('final_shared_commit', 2)]:
+                with span(phase), span('evidence_chunk_read', nested=True):
+                    for _ in range(calls):
+                        event('cli', time.monotonic(), attempt=1)
+            self.assertNotIn(STAGE_ENV, os.environ)
+            rows = [json.loads(f.read_text(encoding='utf-8')) for f in Path(directory).glob('*.json')]
+        stages = summarize(rows, 5)['stages']
+        self.assertEqual(stages['shared_restore']['inclusive_cli_calls'], 1)
+        self.assertEqual(stages['final_shared_commit']['inclusive_cli_calls'], 2)

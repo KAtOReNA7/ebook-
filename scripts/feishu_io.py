@@ -210,14 +210,16 @@ class Base:
             self.changes += len(payload.get('create_records', payload.get('update_records', {}))) if isinstance(payload,dict) else 0
         return reply
 
-    def read(self, table, conditions=None):
+    def read(self, table, conditions=None, *, filter_logic='and'):
+        if filter_logic not in {'and', 'or'} or (filter_logic == 'or' and not conditions):
+            raise ValueError('Invalid record-list filter')
         page_size = getattr(self, 'read_page_size', 2000)
         if type(page_size) is not int or not 1 <= page_size <= 2000:
             raise ValueError('Invalid read page size')
         flags = {'minimal_stdout': True, 'limit': page_size}
         if conditions:
             filt = self.receipt_dir / (uuid.uuid4().hex + '.filter.json')
-            save(filt, {'logic': 'and', 'conditions': conditions})
+            save(filt, {'logic': filter_logic, 'conditions': conditions})
             flags['filter_json'] = '@' + str(filt.relative_to(ROOT))
         rows, seen = [], set()
         # The CLI exposes offset pagination. Every page has its own receipt;
@@ -252,7 +254,9 @@ class Base:
                 raise RuntimeError(f'{table}: pagination did not advance; no full-read assertion')
         raise RuntimeError(f'{table}: pagination exceeded 100 pages; narrow predicate before continuing')
 
-    def ensure(self, table, key, rows, conditions=None, update=False):
+    def ensure(self, table, key, rows, conditions=None, update=False, *, immutable=False):
+        if immutable and update:
+            raise ValueError('Immutable batches cannot update existing records')
         current = self.read(table, conditions)
         context_index={r.get(key):r for r in current}
         rows=[self._present(table,r,context_index.get(r.get(key))) for r in rows]
@@ -280,6 +284,8 @@ class Base:
         incoming = [r[key] for r in rows]
         if len(incoming) != len(set(incoming)):
             raise RuntimeError(f'{table}: duplicate input keys')
+        if immutable and index and index.keys() != set(incoming):
+            raise ValueError(f'{table}: Missing or unexpected immutable evidence chunk')
         new = [r for r in rows if r[key] not in index]
         updates = {index[r[key]]['record_id']: r for r in rows if r[key] in index and update
                    and any(not same(v, self._present(table,index[r[key]]).get(k)) for k, v in r.items())}

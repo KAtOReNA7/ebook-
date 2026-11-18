@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from scripts.evidence_store import EvidenceStore, lease_cache, CACHE_ENV
+from scripts.evidence_store import EvidenceStore, lease_cache, CACHE_ENV, pack_groups
 from scripts.shared_runtime import Store, SCHEMA, digest, LEASE_ENV, restore, chunk_conditions
 from scripts.stage_checkpoint import StageStore, delta, reconstruct
 from tests.test_shared_runtime import MemoryBase
@@ -18,16 +18,72 @@ def checkpoint(files, day='2099-01-01'):
 
 
 class CountingBase(MemoryBase):
-    def __init__(self): super().__init__(); self.writes=[]; self.reads=[]
-    def ensure(self, table, key, rows, conditions=None, update=False):
-        self.writes.extend(copy.deepcopy(rows))
-        return super().ensure(table,key,rows,conditions,update)
-    def read(self,table,conditions=None):
+    def __init__(self):
+        super().__init__()
+        self.writes, self.reads, self.filter_logics = [], [], []
+
+    def call(self, command, table, payload):
+        self.writes.extend(copy.deepcopy(payload.get('create_records') or list(payload['update_records'].values())))
+        return super().call(command, table, payload)
+
+    def read(self,table,conditions=None, *, filter_logic='and'):
         self.reads.append(conditions)
-        return super().read(table,conditions)
+        self.filter_logics.append(filter_logic)
+        return super().read(table,conditions,filter_logic=filter_logic)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_pack_groups_keep_large_packs_isolated_and_small_batches_in_one_page(self):
+        sizes = {'a': 60, 'b': 40, 'c': 101, 'd': 40, 'e': 30, 'f': 31}
+        self.assertEqual(list(pack_groups(sizes)), [
+            {'a': 60, 'b': 40}, {'c': 101}, {'d': 40, 'e': 30}, {'f': 31}])
+
+    def test_immutable_pack_uses_one_preflight_and_one_post_create_read(self):
+        api = CountingBase()
+        values = {digest(b'original'):'original'}
+        store = EvidenceStore(api)
+        ref = store.put_pack(values)
+        self.assertEqual(len(api.reads), 2)
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(store.put_pack(values), ref)
+        self.assertEqual(len(api.reads), 3)
+        self.assertEqual(len(api.writes), 1)
+        api.rows[next(iter(api.rows))]['内容'] = 'changed remotely'
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            store.put_pack(values)
+        self.assertEqual(len(api.writes), 1)
+
+    def test_cold_restore_groups_active_and_archived_packs_and_rejects_wrong_rows(self):
+        api = CountingBase()
+        evidence = EvidenceStore(api)
+        paths = {}
+        for index in range(11):
+            text = f'original {index}\r\n'
+            checksum = digest(text.encode())
+            paths[f'runs/source-{index}.json'] = {**evidence.put_pack({checksum:text}), 'sha256':checksum}
+        active_name = next(iter(paths))
+        active = {active_name:paths.pop(active_name)}
+        manifest = {'schema':SCHEMA, 'storage':'ebook-content-manifest.v1', 'value':{'schema':SCHEMA},
+                    'files':active, 'archive':{name:[ref] for name,ref in paths.items()}}
+        api.reads.clear()
+        api.filter_logics.clear()
+        self.assertEqual(EvidenceStore(api).thaw(manifest)['files'][active_name]['text'], 'original 0\r\n')
+        self.assertEqual([len(conditions) for conditions in api.reads], [8, 3])
+        self.assertEqual(api.filter_logics, ['or', 'or'])
+        archive = next(iter(paths.values()))
+        archive_key = 'cas:'+archive['pack']+':00000'
+        original = api.rows[archive_key]
+        for issue, row in [('duplicate', dict(original, record_id='another')),
+                           ('unexpected', dict(original, 状态键=archive_key+'extra'))]:
+            with self.subTest(issue=issue):
+                api.rows['injected'] = row
+                with self.assertRaisesRegex(ValueError, 'duplicate or unexpected'):
+                    EvidenceStore(api).thaw(manifest)
+                del api.rows['injected']
+        del api.rows[archive_key]
+        with self.assertRaisesRegex(ValueError, 'Missing'):
+            EvidenceStore(api).thaw(manifest)
+
     def test_cached_pack_skips_identical_disk_writes_and_fresh_read_checks_remote(self):
         with TemporaryDirectory() as d, patch.dict(os.environ, {LEASE_ENV:'lease'}, clear=True):
             os.environ[CACHE_ENV] = lease_cache(d, 'lease')

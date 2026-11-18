@@ -8,6 +8,7 @@ from pathlib import Path
 import uuid
 
 from scripts.shared_runtime import TABLE, LEASE_ENV, capture, digest, safe_path, chunk_conditions
+from scripts.run_performance import span, timed
 
 ENV = 'EBOOK_STAGE_CONTEXT'
 SCHEMA = 'ebook-stage-journal.v2'
@@ -47,6 +48,7 @@ class StageStore:
             raise StagePersistenceError('Unknown stage journal schema')
         return meta
 
+    @timed('stage_journal_read', nested=True)
     def read(self, *, fresh=True):
         meta = self.head()
         if meta is None: return None, None
@@ -66,6 +68,7 @@ class StageStore:
         if self.head()!=meta: raise StagePersistenceError('Stage HEAD changed during read')
         return value, meta
 
+    @timed('stage_journal_publish', nested=True)
     def publish(self, value):
         prior = self.head()
         logical = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
@@ -82,12 +85,14 @@ class StageStore:
         rows = [{'状态键':prefix+f'{i:05}', '内容':part, '校验值':digest(part.encode())} for i,part in enumerate(parts)]
         # Chunk writes are read back before moving the pointer. Unknown outcomes
         # retain the global lease; no business action is retried here.
-        self.api.ensure(TABLE, '状态键', rows, chunk_conditions(prefix,len(parts)), update=True)
+        with span('stage_chunk_write_readback', nested=True):
+            self.api.ensure(TABLE, '状态键', rows, chunk_conditions(prefix,len(parts)), update=True)
         meta = {'schema':value.get('schema'),'slot':slot,'chunks':len(parts),'sha256':digest(raw),'generation':uuid.uuid4().hex}
         if wire.get('storage'): meta['content_sha256'] = digest(logical)
         text = json.dumps(meta, sort_keys=True)
-        self.api.ensure(TABLE,'状态键',[{'状态键':HEAD,'内容':text,'校验值':digest(text.encode())}],
-                        [['状态键','==',HEAD]], update=True)
+        with span('stage_head_write_readback', nested=True):
+            self.api.ensure(TABLE,'状态键',[{'状态键':HEAD,'内容':text,'校验值':digest(text.encode())}],
+                            [['状态键','==',HEAD]], update=True)
         actual, observed = self.read(fresh=False)
         if actual != value or observed != meta: raise StagePersistenceError('Stage journal readback differs')
         return meta
@@ -192,7 +197,6 @@ def context(root):
 
 
 def persist(root, phase):
-    from scripts.run_performance import span
     _, ctx = context(root)
     with span('stage_evidence_'+(ctx['stage'] if ctx else 'none')+'_'+phase):
         return _persist(root, phase)
@@ -207,7 +211,8 @@ def _persist(root, phase):
         from scripts.shared_runtime import Store
         current=capture(root,ctx['day'])
         capture_seconds=time.monotonic()-started
-        fingerprint=digest(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
+        with span('stage_checkpoint_fingerprint', nested=True):
+            fingerprint=digest(json.dumps(current,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
         # Only a completed, previously confirmed checkpoint may suppress another
         # read-only completed stage. Never suppress before-write or failure evidence.
         if (phase=='completed' and ctx.get('confirmed_phase')=='completed'
@@ -216,8 +221,9 @@ def _persist(root, phase):
             ctx['last_save']={'phase':phase,'skipped_unchanged':True,'seconds':time.monotonic()-started}
             write(path,ctx)
             return
-        value=indexed_delta(stage_baseline(path.parent, ctx),current,ctx['parent_generation'],
-                            os.environ[LEASE_ENV],ctx['stage'],phase)
+        with span('stage_checkpoint_delta', nested=True):
+            value=indexed_delta(stage_baseline(path.parent, ctx),current,ctx['parent_generation'],
+                                os.environ[LEASE_ENV],ctx['stage'],phase)
         api=Base(Path(root)/'receipts'/ctx['day']/('stage-'+uuid.uuid4().hex))
         Store(api).discover()  # Existing private system table only.
         store = StageStore(api)
@@ -250,7 +256,7 @@ def before_mutation(root, table):
 
 
 def run_stage(root, name, function, *args, **kwargs):
-    from scripts.run_performance import span, event
+    from scripts.run_performance import event
     with span(name):
         started=time.monotonic()
         result=_run_stage(root, name, function, *args, **kwargs)

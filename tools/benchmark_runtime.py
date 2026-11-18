@@ -22,7 +22,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from scripts.feishu_io import Base
-from scripts.shared_runtime import Store, TABLE, FIELDS
+from scripts.shared_runtime import Store, TABLE, FIELDS, digest
 from scripts.stage_checkpoint import StageStore
 from scripts import stage_checkpoint
 from scripts.shared_runtime import LEASE_ENV
@@ -38,10 +38,11 @@ class Transport(Base):
         self.counts={'read_calls':0,'full_table_reads':0,'page_calls':0,'write_calls':0,
                      'returned_bytes':0,'written_bytes':0,'written_rows':0}
 
-    def read(self,table,conditions=None):
-        rows=list(self.records.values())
-        for field,op,value in conditions or []:
-            rows=[r for r in rows if (r[field]==value if op=='==' else value in r[field])]
+    def read(self,table,conditions=None, *, filter_logic='and'):
+        match = any if filter_logic == 'or' else all
+        rows = [row for row in self.records.values() if match(
+            row[field] == value if op == '==' else value in row[field]
+            for field, op, value in conditions or [])]
         self.counts['read_calls']+=1
         self.counts['full_table_reads']+=int(not conditions)
         self.counts['page_calls']+=max(1,math.ceil(len(rows)/getattr(self,'read_page_size',100)))
@@ -82,7 +83,8 @@ def unchanged_stages(module, checkpoint):
         root=Path(d)
         module.start(root,{**checkpoint,'files':{}},{'generation':'synthetic'},'synthetic-lease')
         with patch.object(module,'capture',return_value=checkpoint), \
-             patch('scripts.feishu_io.Base',return_value=api),patch.object(Store,'discover'):
+             patch('scripts.feishu_io.Base',return_value=api),patch('scripts.feishu_io.ROOT',root), \
+             patch.object(Store,'discover'):
             module.persist(root,'completed')
             def repeat():
                 for name in ('readonly-comparison','readonly-validation'):
@@ -93,8 +95,10 @@ def unchanged_stages(module, checkpoint):
 
 def run(revision='8df98a9',file_count=64,bytes_per_file=32768):
     rng=random.Random(1638)
-    files={f'runs/synthetic-{i}.json':{'text':base64.b64encode(rng.randbytes(bytes_per_file)).decode()}
-           for i in range(file_count)}
+    files = {}
+    for index in range(file_count):
+        text = base64.b64encode(rng.randbytes(bytes_per_file)).decode()
+        files[f'runs/synthetic-{index}.json'] = {'text':text, 'sha256':digest(text.encode())}
     checkpoint={'schema':'ebook-shared-checkpoint.v8','files':files,'day':'2099-01-01'}
     journal={'schema':'ebook-stage-journal.v1','files':dict(list(files.items())[:file_count//2]),'phase':'completed'}
     seed=Transport();s=Store(seed);s.publish(checkpoint);s.publish({**checkpoint,'version':1})

@@ -9,18 +9,19 @@ from unittest.mock import patch
 from scripts.shared_runtime import capture,restore,digest,LEASE_ENV
 from scripts.stage_checkpoint import indexed_delta, stage_baseline
 from scripts.stage_checkpoint import StageStore,StagePersistenceError,delta,reconstruct,run_stage,before_mutation,start,ENV,context,require_settled
+from tests.test_shared_runtime import MemoryBase
 
 
-class MemoryStageBase:
-    def __init__(self):self.records={};self.fail=False;self.changes=0
-    def read(self,table,conditions=None):
-        rows=list(self.records.values())
-        for _,op,key in conditions or []:
-            rows=[r for r in rows if (r['状态键']==key if op=='==' else key in r['状态键'])]
-        return copy.deepcopy(rows)
-    def ensure(self,table,key,rows,conditions=None,update=False):
-        if self.fail:raise RuntimeError('connection lost before ack')
-        for row in rows:self.records[row[key]]=dict(row);self.changes+=1
+class MemoryStageBase(MemoryBase):
+    def __init__(self):
+        super().__init__()
+        self.records = self.rows
+        self.fail = False
+
+    def call(self, command, table, payload):
+        if self.fail:
+            raise RuntimeError('connection lost before ack')
+        return super().call(command, table, payload)
 
 
 class StageCheckpointTests(unittest.TestCase):

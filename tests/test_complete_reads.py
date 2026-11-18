@@ -8,7 +8,7 @@ from scripts import feishu_io
 
 
 class CompleteReadTests(unittest.TestCase):
-    def read_pages(self, pages, conditions=None):
+    def read_pages(self, pages, conditions=None, *, filter_logic='and'):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             calls = []
@@ -19,14 +19,16 @@ class CompleteReadTests(unittest.TestCase):
                     self.receipt_dir.mkdir()
 
                 def call(self, command, table=None, payload=None, **flags):
-                    calls.append(flags)
+                    filter_file = flags.get('filter_json')
+                    query = json.loads((root/filter_file[1:]).read_text(encoding='utf-8')) if filter_file else None
+                    calls.append({**flags, 'query':query})
                     rows, metadata = pages[len(calls) - 1]
                     (root / flags['output']).write_text(
                         '\n'.join(json.dumps(row) for row in rows), encoding='utf-8')
                     return metadata
 
             with patch.object(feishu_io, 'ROOT', root):
-                rows = PageBase().read('项目总表', conditions)
+                rows = PageBase().read('项目总表', conditions, filter_logic=filter_logic)
             return rows, calls
 
     def test_more_than_2000_rows_and_filter_are_read_completely(self):
@@ -44,6 +46,15 @@ class CompleteReadTests(unittest.TestCase):
     def test_missing_has_more_cannot_certify_a_full_read(self):
         with self.assertRaisesRegex(RuntimeError, 'pagination metadata'):
             self.read_pages([([{'record_id': 'a'}], {'records_count': 1})])
+
+    def test_or_filter_is_reused_across_complete_pages(self):
+        conditions = [['状态键','intersects','cas:a:'], ['状态键','intersects','cas:b:']]
+        pages = [
+            ([{'record_id': 'a'}], {'has_more': True, 'records_count': 1}),
+            ([{'record_id': 'b'}], {'has_more': False, 'records_count': 1})]
+        rows, calls = self.read_pages(pages, conditions, filter_logic='or')
+        self.assertEqual(rows, [{'record_id': 'a'}, {'record_id': 'b'}])
+        self.assertEqual([call['query'] for call in calls], [{'logic':'or','conditions':conditions}]*2)
 
     def test_duplicate_page_is_not_accepted(self):
         with self.assertRaisesRegex(RuntimeError, 'repeated record ID'):

@@ -5,7 +5,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch, Mock
 
-from scripts.shared_runtime import Mutex, Store, capture, restore, digest, safe_path, TABLE, commit_checkpoint
+from scripts.feishu_io import Base
+from scripts.shared_runtime import Mutex, Store, capture, restore, digest, safe_path, TABLE, FIELDS, commit_checkpoint
 
 
 class FakeGit:
@@ -30,16 +31,28 @@ class FakeGit:
         raise AssertionError(endpoint)
 
 
-class MemoryBase:
-    def __init__(self): self.rows = {}; self.fail_chunks = False
-    def read(self, _, conditions=None):
-        rows=list(self.rows.values())
-        for _,op,key in conditions or []:
-            rows=[r for r in rows if (r['状态键']==key if op=='==' else key in r['状态键'])]
-        return copy.deepcopy(rows)
-    def ensure(self, table, key, rows, conditions=None, update=False):
-        if self.fail_chunks and any(r[key] != 'HEAD' for r in rows): raise RuntimeError('interrupted')
-        for row in rows: self.rows[row[key]] = {**row, 'record_id': row[key]}
+class MemoryBase(Base):
+    def __init__(self):
+        self.rows = {}
+        self.fail_chunks = False
+        self.changes = 0
+        self.manifest = {'tables': {TABLE: {'field_readback': {'fields': FIELDS}}}}
+
+    def read(self, _, conditions=None, *, filter_logic='and'):
+        match = any if filter_logic == 'or' else all
+        return copy.deepcopy([row for row in self.rows.values() if match(
+            row[field] == value if op == '==' else value in row[field]
+            for field, op, value in conditions or [])])
+
+    def call(self, command, table, payload):
+        assert command in {'+record-batch-create', '+record-batch-update'}
+        rows = payload.get('create_records') or payload['update_records'].values()
+        if self.fail_chunks and any(row['状态键'] != 'HEAD' for row in rows):
+            raise RuntimeError('interrupted')
+        for row in rows:
+            self.rows[row['状态键']] = {**row, 'record_id': row['状态键']}
+        self.changes += len(rows)
+        return {'ok': True}
 
 
 class SharedRuntimeTests(unittest.TestCase):
